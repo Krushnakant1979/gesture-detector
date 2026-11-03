@@ -51,7 +51,7 @@ heuristics:
   u_v_spread_ratio: 1.25
   k_thumb_proximity: 0.45
   l_thumb_horizontal_ratio: 0.85
-  fist_m_transverse: 0.55
+  fist_m_transverse: 0.52
   fist_n_transverse: 0.35
   fist_e_thumb_height: 0.02
   b_finger_dist_im: 0.42

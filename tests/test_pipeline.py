@@ -359,6 +359,58 @@ def test_strict_l_gesture():
     assert res_thumb_tucked != "L", f"Tucked thumb should not be L, got {res_thumb_tucked}"
 
 
+def test_strict_m_gesture():
+    """Verifies that thumb tucked under 3 fingers detects M, rejecting wrong gestures."""
+    classifier = GestureClassifier(mode="heuristic")
+
+    w, h = 616.0, 696.0
+    user_m = np.zeros((21, 3), dtype=np.float32)
+    user_m[0] = [369.5/w, 76.6/h, 0]
+    user_m[1] = [247.8/w, 140.3/h, 0]
+    user_m[2] = [192.5/w, 250.3/h, 0]
+    user_m[3] = [208.8/w, 353.2/h, 0]
+    user_m[4] = [299.1/w, 338.1/h, 0]
+    user_m[5] = [148.7/w, 269.1/h, 0]
+    user_m[6] = [109.9/w, 439.1/h, 0]
+    user_m[7] = [94.9/w, 525.3/h, 0]
+    user_m[8] = [84.5/w, 598.4/h, 0]
+    user_m[9] = [239.0/w, 275.2/h, 0]
+    user_m[10] = [219.4/w, 461.8/h, 0]
+    user_m[11] = [210.4/w, 563.0/h, 0]
+    user_m[12] = [201.6/w, 641.1/h, 0]
+    user_m[13] = [330.2/w, 281.7/h, 0]
+    user_m[14] = [313.8/w, 357.8/h, 0]
+    user_m[15] = [313.6/w, 446.7/h, 0]
+    user_m[16] = [293.0/w, 615.0/h, 0]
+    user_m[17] = [408.3/w, 285.7/h, 0]
+    user_m[18] = [348.2/w, 371.5/h, 0]
+    user_m[19] = [297.4/w, 543.1/h, 0]
+    user_m[20] = [252.5/w, 429.0/h, 0]
+
+    # 1. User M image must classify as M
+    res_m, conf_m = classifier.classify(user_m, handedness="Left")
+    assert res_m == "M", f"User M gesture should classify as M, got {res_m}"
+    assert conf_m >= 0.95
+
+    # 2. Right-hand parity
+    user_m_right = np.copy(user_m)
+    user_m_right[:, 0] = 1.0 - user_m_right[:, 0]
+    res_m_r, conf_m_r = classifier.classify(user_m_right, handedness="Right")
+    assert res_m_r == "M", f"Right hand M should classify as M, got {res_m_r}"
+
+    # 3. Open palm must NOT classify as M
+    open_palm = np.zeros((21, 3), dtype=np.float32)
+    open_palm[0] = [0, 0, 0]
+    open_palm[5] = [0.15, -0.5, 0.0]
+    open_palm[8] = [0.25, -0.95, 0.0]
+    open_palm[12] = [0.0, -0.98, 0.0]
+    open_palm[16] = [-0.25, -0.95, 0.0]
+    open_palm[20] = [-0.40, -0.90, 0.0]
+    open_palm[4] = [0.65, -0.45, 0.0]
+    res_op, _ = classifier.classify(open_palm)
+    assert res_op != "M", f"Open palm should not be M, got {res_op}"
+
+
 if __name__ == "__main__":
     print("Running self-checks...")
     test_normalizer_invariance()
@@ -387,4 +439,6 @@ if __name__ == "__main__":
     print("[PASS] Strict B gesture test passed")
     test_strict_l_gesture()
     print("[PASS] Strict L gesture test passed")
+    test_strict_m_gesture()
+    print("[PASS] Strict M gesture test passed")
     print("\nAll ASL pipeline tests completed successfully!")

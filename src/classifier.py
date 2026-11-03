@@ -32,7 +32,7 @@ class GestureClassifier:
     """Classifies hand gestures into ASL Alphabet characters (A-Z)."""
 
     TOPOLOGICAL_SIGNS = {
-        "A", "O", "Q", "X", "B", "C", "W", "F", "L", "Y", "V", "U", "H", "P", "K", "R"
+        "A", "O", "Q", "X", "B", "C", "W", "F", "L", "Y", "V", "U", "H", "P", "K", "R", "M", "N"
     }
 
     def __init__(
@@ -199,6 +199,15 @@ class GestureClassifier:
             if up_all_4 and fingers_close and thumb_tucked:
                 return "B", 0.95
 
+            # If fingers are draped down/forward over thumb in a fist formation (M, N)
+            if not (idx_up or mid_up or rng_up or pnk_up):
+                fist_m = float(self.heuristics.get("fist_m_transverse", 0.52))
+                fist_n = float(self.heuristics.get("fist_n_transverse", 0.35))
+                if t_thumb >= fist_m and not thumb_out:
+                    return "M", 0.95
+                if fist_n <= t_thumb < fist_m and not thumb_out:
+                    return "N", 0.94
+
             # 3. Any other 4-finger pose (like flat open palm / 5 with thumb out in Image 1):
             # Strictly return None (never guess C or B!)
             return "None", 0.0
@@ -208,11 +217,21 @@ class GestureClassifier:
         # ==============================================================
         if num_ext == 3:
             if idx_ext and mid_ext and rng_ext and not pnk_ext:
-                return "W", 0.94
+                if idx_up and mid_up and rng_up:
+                    return "W", 0.94
 
             if not idx_ext and mid_ext and rng_ext and pnk_ext:
                 if d_ti < 0.42:
                     return "F", 0.95
+
+            # If fingers are draped down/forward over thumb in a fist formation (M, N)
+            if not (idx_up or mid_up or rng_up or pnk_up):
+                fist_m = float(self.heuristics.get("fist_m_transverse", 0.52))
+                fist_n = float(self.heuristics.get("fist_n_transverse", 0.35))
+                if t_thumb >= fist_m and not thumb_out:
+                    return "M", 0.95
+                if fist_n <= t_thumb < fist_m and not thumb_out:
+                    return "N", 0.94
 
         # ==============================================================
         # GROUP C — Two extended fingers (P, H, K, R, V, U)
@@ -286,18 +305,18 @@ class GestureClassifier:
         # ==============================================================
         # GROUP E — Zero extended fingers: Fist variants (M, N, T, S, A, E)
         # ==============================================================
-        if num_ext == 0:
-            fist_m = float(self.heuristics.get("fist_m_transverse", 0.55))
+        if num_ext == 0 or (not (idx_up or mid_up or rng_up or pnk_up) and not m["is_C_shape"]):
+            fist_m = float(self.heuristics.get("fist_m_transverse", 0.52))
             fist_n = float(self.heuristics.get("fist_n_transverse", 0.35))
             fist_e = float(self.heuristics.get("fist_e_thumb_height", 0.02))
 
             # M: Thumb tucked under 3 fingers
-            if t_thumb >= fist_m:
-                return "M", 0.94
+            if t_thumb >= fist_m and not thumb_out:
+                return "M", 0.95
 
             # N: Thumb tucked under 2 fingers
-            if fist_n <= t_thumb < fist_m:
-                return "N", 0.93
+            if fist_n <= t_thumb < fist_m and not thumb_out:
+                return "N", 0.94
 
             # T: Thumb poked up between index and middle
             if 0.10 <= t_thumb < fist_n and m["is_thumb_pointing_up"] and h_thumb > 0.04 and abs(t_thumb - 0.22) < 0.12:

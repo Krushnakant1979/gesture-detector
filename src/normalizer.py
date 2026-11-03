@@ -139,7 +139,7 @@ class LandmarkNormalizer:
             and abs(v_thumb[1]) > 0.55 * abs(v_thumb[0])
         )
 
-        thumb_extended_out = bool(d_thumb_index_mcp > 0.42 and d_thumb_wrist > 0.65)
+        thumb_extended_out = bool(d_thumb_index_mcp > 0.42 and d_thumb_wrist > 0.65 and t_thumb < 0.25)
 
         # ----------------------------------------------------------------
         # LETTER K: Thumb elevated UP between index and middle fingers
