@@ -261,16 +261,28 @@ class LandmarkNormalizer:
 
         # ----------------------------------------------------------------
         # C SHAPE DETECTION: All 4 fingers curved in C formation
+        # In C, fingers are arched in a curved C-cup (never flat upright open palm).
+        # Thumb curves opposite to form the lower jaw of C with open aperture (0.22 - 0.85).
         # ----------------------------------------------------------------
         d_index_wrist_norm = float(np.linalg.norm(lm[8] - wrist) / ref_scale)
         d_ring_wrist_norm = float(np.linalg.norm(lm[16] - wrist) / ref_scale)
+
+        # Flat open hand (Image 1): all 4 fingers straight upright and thumb out
+        is_flat_open_hand = bool(
+            up_index and up_middle and up_ring and up_pinky
+            and (thumb_extended_out or d_index_middle_tip > 0.35 or d_middle_ring_tip > 0.35)
+        )
+
         is_C_shape = bool(
             not is_O_shape
-            and not up_index
-            and d_thumb_index_tip > 0.30
-            and d_index_wrist_norm > 0.60
-            and d_ring_wrist_norm > 0.45
-            and thumb_extended_out
+            and not is_flat_open_hand
+            and d_thumb_index_tip > 0.22
+            and d_thumb_index_tip < 0.85
+            and d_thumb_middle_tip < 0.88
+            and d_index_wrist_norm > 0.45
+            and d_ring_wrist_norm > 0.35
+            and (thumb_extended_out or d_thumb_index_mcp > 0.35)
+            and (horiz_index or horiz_middle or is_hand_horizontal or not up_index or lm[8][2] < lm[5][2] - 0.10)
         )
 
         # ----------------------------------------------------------------

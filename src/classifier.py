@@ -179,14 +179,19 @@ class GestureClassifier:
         # GROUP A — Four extended fingers (B, C)
         # ==============================================================
         if num_ext == 4:
+            # 1. C Shape: Must strictly satisfy is_C_shape (fingers curved in C cup, never flat open palm)
             if m["is_C_shape"]:
-                return "C", 0.92
+                return "C", 0.95
 
-            if not thumb_out and d_im < 0.50 and d_mr < 0.50 and d_rp < 0.50:
+            # 2. B Shape: All 4 fingers straight UP together, thumb tucked across palm
+            up_all_4 = bool(idx_up and mid_up and rng_up and pnk_up)
+            fingers_close = bool(d_im < 0.45 and d_mr < 0.45 and d_rp < 0.45)
+            if up_all_4 and fingers_close and (not thumb_out or t_thumb >= 0.05):
                 return "B", 0.95
 
-            if thumb_out:
-                return "C", 0.90
+            # 3. Any other 4-finger pose (like flat open palm / 5 with thumb out in Image 1):
+            # Strictly return None (never guess C!)
+            return "None", 0.0
 
         # ==============================================================
         # GROUP B — Three extended fingers (W, F)

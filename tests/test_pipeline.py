@@ -208,6 +208,62 @@ def test_strict_a_gesture():
     assert wrong_pose == "None"
 
 
+def test_c_vs_open_palm_distinction():
+    """Verifies that only an arched C-cup gesture produces 'C', and flat open palms are rejected."""
+    classifier = GestureClassifier(mode="heuristic")
+
+    # Image 1 style: flat open palm (5 / high five)
+    open_palm = np.zeros((21, 3), dtype=np.float32)
+    open_palm[0] = [0, 0, 0]
+    open_palm[1] = [0.15, -0.2, 0.0]
+    open_palm[2] = [0.25, -0.35, 0.0]
+    open_palm[3] = [0.45, -0.40, 0.0]
+    open_palm[4] = [0.65, -0.45, 0.0]
+    open_palm[5] = [0.15, -0.5, 0.0]
+    open_palm[9] = [0.0, -0.52, 0.0]
+    open_palm[13] = [-0.15, -0.5, 0.0]
+    open_palm[17] = [-0.28, -0.45, 0.0]
+    open_palm[8] = [0.25, -0.95, 0.0]
+    open_palm[12] = [0.0, -0.98, 0.0]
+    open_palm[16] = [-0.25, -0.95, 0.0]
+    open_palm[20] = [-0.40, -0.90, 0.0]
+    open_palm[6] = [0.20, -0.7, 0.0]
+    open_palm[10] = [0.0, -0.75, 0.0]
+    open_palm[14] = [-0.20, -0.7, 0.0]
+    open_palm[18] = [-0.35, -0.65, 0.0]
+
+    res_open, _ = classifier.classify(open_palm)
+    assert res_open == "None", f"Open palm should be rejected, got {res_open}"
+
+    # Image 2 style: true curved C cup
+    true_c = np.zeros((21, 3), dtype=np.float32)
+    true_c[0] = [0, 0, 0]
+    true_c[5] = [0.40, -0.30, 0.0]
+    true_c[9] = [0.42, -0.25, 0.0]
+    true_c[13] = [0.40, -0.20, 0.0]
+    true_c[17] = [0.38, -0.15, 0.0]
+    true_c[6] = [0.55, -0.35, 0.0]
+    true_c[7] = [0.65, -0.32, 0.0]
+    true_c[8] = [0.70, -0.28, 0.0]
+    true_c[10] = [0.58, -0.30, 0.0]
+    true_c[11] = [0.68, -0.27, 0.0]
+    true_c[12] = [0.72, -0.24, 0.0]
+    true_c[14] = [0.55, -0.25, 0.0]
+    true_c[15] = [0.65, -0.22, 0.0]
+    true_c[16] = [0.70, -0.19, 0.0]
+    true_c[18] = [0.50, -0.20, 0.0]
+    true_c[19] = [0.60, -0.17, 0.0]
+    true_c[20] = [0.65, -0.14, 0.0]
+    true_c[1] = [0.15, -0.05, 0.0]
+    true_c[2] = [0.30, 0.05, 0.0]
+    true_c[3] = [0.50, 0.10, 0.0]
+    true_c[4] = [0.68, 0.08, 0.0]
+
+    res_c, conf_c = classifier.classify(true_c)
+    assert res_c == "C", f"True C should be classified as C, got {res_c}"
+    assert conf_c >= 0.95
+
+
 if __name__ == "__main__":
     print("Running self-checks...")
     test_normalizer_invariance()
@@ -230,4 +286,6 @@ if __name__ == "__main__":
     print("[PASS] K vs V distinction test passed")
     test_strict_a_gesture()
     print("[PASS] Strict A gesture distinction test passed")
+    test_c_vs_open_palm_distinction()
+    print("[PASS] C vs Open Palm distinction test passed")
     print("\nAll ASL pipeline tests completed successfully!")
