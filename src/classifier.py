@@ -173,13 +173,7 @@ class GestureClassifier:
             return "P", 0.96
 
         # ==============================================================
-        # PRIORITY 5 — Letter M (3-finger forward drape)
-        # ==============================================================
-        if m.get("is_M_shape"):
-            return "M", 0.96
-
-        # ==============================================================
-        # PRIORITY 6 — Letter N (2-finger forward drape)
+        # PRIORITY 5 — Letter N (2-finger forward drape)
         # ==============================================================
         if m.get("is_N_shape"):
             return "N", 0.96
@@ -256,7 +250,8 @@ class GestureClassifier:
             if is_downward_pair:
                 d_mcp_im = float(np.linalg.norm(lm[5] - lm[9]))
                 spread_ratio = (d_im * ref) / (d_mcp_im + 1e-5)
-                if spread_ratio < 1.20 or d_im < 0.30:
+                # N: fingers together, thumb NOT pinched to index (Q has d_ti < 0.40)
+                if (spread_ratio < 1.20 or d_im < 0.30) and d_ti > 0.35:
                     return "N", 0.95
                 elif d_ti > 0.22:
                     return "P", 0.95

@@ -15,13 +15,13 @@ tracker:
   box_padding: 20
 
 filter:
-  smoothing_alpha: 0.65    # Exponential Moving Average smoothing factor (0.01 to 1.0)
+  smoothing_alpha: 0.45    # Exponential Moving Average smoothing factor — lower = smoother/less reactive to noise
   enable_smoothing: true
   enable_trajectory: true  # Dynamic stroke tracking for J and Z signs
 
 debouncer:
-  consecutive_frames: 4    # Fast 4-frame response
-  history_length: 8
+  consecutive_frames: 8    # Require 8 consecutive frames (~266ms at 30fps) before confirming state change
+  history_length: 16       # Wider history window for dominant-gesture holding
 
 visualizer:
   mirror: true

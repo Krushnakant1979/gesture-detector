@@ -272,15 +272,21 @@ class LandmarkNormalizer:
         d_index_wrist_norm = float(np.linalg.norm(lm[8] - wrist) / ref_scale)
         d_ring_wrist_norm = float(np.linalg.norm(lm[16] - wrist) / ref_scale)
 
-        # Flat open hand (Image 1): all 4 fingers straight upright and thumb out
+        # Flat open hand (Image 1): all 4 fingers straight upright and spread
+        # Also catches cases where ANY two fingers point straight up widely apart
         is_flat_open_hand = bool(
-            up_index and up_middle and up_ring and up_pinky
-            and (thumb_extended_out or d_index_middle_tip > 0.35 or d_middle_ring_tip > 0.35)
+            (up_index and up_middle and up_ring and up_pinky)
+            or (up_index and up_middle and up_ring and d_index_middle_tip > 0.28)
+            or (up_index and up_middle and d_index_middle_tip > 0.32 and d_middle_ring_tip > 0.28)
         )
 
         is_C_shape = bool(
             not is_O_shape
             and not is_flat_open_hand
+            and not up_index                        # C fingers are NEVER fully upright — they curve forward
+            and not up_middle
+            and not up_ring
+            and not up_pinky
             and d_index_middle_tip < 0.38
             and d_thumb_index_tip > 0.22
             and d_thumb_index_tip < 0.85
@@ -288,7 +294,7 @@ class LandmarkNormalizer:
             and d_index_wrist_norm > 0.45
             and d_ring_wrist_norm > 0.35
             and (thumb_extended_out or d_thumb_index_mcp > 0.35)
-            and (horiz_index or horiz_middle or is_hand_horizontal or not up_index or lm[8][2] < lm[5][2] - 0.10)
+            and (horiz_index or horiz_middle or is_hand_horizontal or lm[8][2] < lm[5][2] - 0.10)
         )
 
         # ----------------------------------------------------------------
@@ -317,35 +323,14 @@ class LandmarkNormalizer:
         )
 
         # ----------------------------------------------------------------
-        # LETTER M: 3-finger forward drape (Index + Middle + Ring extended down together)
-        # Index, middle, and ring point downward together.
-        # Pinky is folded/curled in the fist (not extended down, not up).
-        # Index and middle are parallel and side-by-side (p_spread_ratio < 1.40).
-        # Ring finger extends down alongside middle (d_middle_ring_tip < 0.75 or y_rng > 0.80).
-        # Pinky tip is curled up far above ring tip (d_ring_pinky_tip > 0.60 or y_rng > y_pnk + 0.30 or lm[16][1] > lm[20][1] + 0.15 * ref_scale).
-        # ----------------------------------------------------------------
-        y_mid = float((lm[12][1] - lm[9][1]) / ref_scale)
-        y_rng = float((lm[16][1] - lm[13][1]) / ref_scale)
-        y_pnk = float((lm[20][1] - lm[17][1]) / ref_scale)
-        is_M_shape = bool(
-            down_index
-            and down_middle
-            and not up_index
-            and not up_middle
-            and not up_ring
-            and not up_pinky
-            and p_spread_ratio < 1.40
-            and (y_rng > 0.80 or d_middle_ring_tip < 0.75)
-            and (d_ring_pinky_tip > 0.60 or y_rng > y_pnk + 0.30 or lm[16][1] > lm[20][1] + 0.15 * ref_scale)
-        )
-
-        # ----------------------------------------------------------------
         # LETTER N: 2-finger forward drape (Index + Middle extended down together)
         # Index and middle point downward together (down_index and down_middle).
         # Ring and pinky are folded/curled (not extended down, not up).
         # Index and middle are parallel and side-by-side (spread_ratio < 1.40).
         # Middle extends significantly further down than ring (lm[12][1] > lm[16][1] + 0.12 * ref_scale).
         # Thumb is tucked under/near index & middle (d_thumb_im < 0.85 or t_thumb < 0.50).
+        # KEY GUARD: Thumb must NOT be pinched to index tip (d_thumb_index_tip > 0.35)
+        # to prevent N from firing when the hand drifts slightly out of Q position.
         # ----------------------------------------------------------------
         d_thumb_im_min = min(d_thumb_index_pip, d_thumb_middle_pip, d_thumb_index_tip)
         is_N_shape = bool(
@@ -356,7 +341,7 @@ class LandmarkNormalizer:
             and not up_ring
             and not up_pinky
             and p_spread_ratio < 1.40
-            and not is_M_shape
+            and d_thumb_index_tip > 0.35           # Thumb NOT pinched to index (Q has d_ti < 0.40)
             and (lm[12][1] > lm[16][1] + 0.12 * ref_scale or lm[8][1] > lm[16][1] + 0.12 * ref_scale or d_middle_ring_tip > 0.80)
             and (d_thumb_im_min < 0.85 or t_thumb < 0.50)
         )
@@ -449,7 +434,6 @@ class LandmarkNormalizer:
             "is_C_shape": is_C_shape,
             "is_D_loop": is_D_loop,
             "is_L_shape": is_L_shape,
-            "is_M_shape": is_M_shape,
             "is_N_shape": is_N_shape,
             "is_P_shape": is_P_shape,
             "is_Q_shape": is_Q_shape,
