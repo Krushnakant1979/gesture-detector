@@ -53,8 +53,8 @@ def load_config(config_path: str = "config/config.yaml") -> Dict[str, Any]:
         },
         "filter": {
             "smoothing_alpha": 0.65,
-            "enable_smoothing": true,
-            "enable_trajectory": true,
+            "enable_smoothing": True,
+            "enable_trajectory": True,
         },
         "debouncer": {"consecutive_frames": 4, "history_length": 8},
         "visualizer": {

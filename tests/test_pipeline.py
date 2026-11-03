@@ -137,6 +137,44 @@ def test_stroke_trajectory_tracker():
     tracker.reset()
 
 
+def test_k_vs_v_distinction():
+    """Verifies that K (elevated thumb between fingers) is reliably separated from V (folded thumb)."""
+    classifier = GestureClassifier(mode="heuristic")
+
+    def make_2finger_hand(cls: str) -> np.ndarray:
+        vec = np.zeros((21, 3), dtype=np.float32)
+        vec[0] = [0, 0, 0]
+        vec[1] = [-0.15, -0.2, 0.0]
+        vec[2] = [-0.25, -0.35, 0.0]
+        vec[3] = [-0.3, -0.45, 0.0]
+        vec[5] = [-0.15, -0.5, 0.0]
+        vec[9] = [0.0, -0.52, 0.0]
+        vec[13] = [0.15, -0.5, 0.0]
+        vec[17] = [0.28, -0.45, 0.0]
+        vec[16] = [0.15, -0.35, 0.1]
+        vec[20] = [0.25, -0.35, 0.1]
+        # Extended index & middle
+        vec[6] = [-0.16, -0.65, 0.0]
+        vec[7] = [-0.18, -0.80, 0.0]
+        vec[8] = [-0.20, -0.95, 0.0]
+        vec[10] = [0.10, -0.65, 0.0]
+        vec[11] = [0.15, -0.80, 0.0]
+        vec[12] = [0.20, -0.95, 0.0]
+        if cls == "K":
+            # Thumb elevated between fingers
+            vec[4] = [0.0, -0.70, 0.05]
+        else:
+            # Thumb folded across palm (V)
+            vec[4] = [0.05, -0.4, 0.1]
+        return vec
+
+    k_letter, _ = classifier.classify(make_2finger_hand("K"))
+    assert k_letter == "K"
+
+    v_letter, _ = classifier.classify(make_2finger_hand("V"))
+    assert v_letter == "V"
+
+
 if __name__ == "__main__":
     print("Running self-checks...")
     test_normalizer_invariance()
@@ -155,4 +193,6 @@ if __name__ == "__main__":
     print("[PASS] Word Predictor test passed")
     test_stroke_trajectory_tracker()
     print("[PASS] Stroke Trajectory Tracker test passed")
+    test_k_vs_v_distinction()
+    print("[PASS] K vs V distinction test passed")
     print("\nAll ASL pipeline tests completed successfully!")

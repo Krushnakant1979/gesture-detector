@@ -49,6 +49,7 @@ heuristics:
   q_thumb_index_dist: 0.40
   q_index_down_offset: 0.18
   u_v_spread_ratio: 1.25
+  k_thumb_proximity: 0.45
   l_thumb_horizontal_ratio: 0.85
   fist_m_transverse: 0.55
   fist_n_transverse: 0.35

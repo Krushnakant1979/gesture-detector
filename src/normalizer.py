@@ -142,14 +142,40 @@ class LandmarkNormalizer:
         thumb_extended_out = bool(d_thumb_index_mcp > 0.42 and d_thumb_wrist > 0.65)
 
         # ----------------------------------------------------------------
-        # LETTER K: Thumb between index and middle
+        # LETTER K: Thumb elevated UP between index and middle fingers
+        # In K, the thumb tip points upward and rests between index and middle fingers
+        # (close to index PIP or middle PIP/MCP, elevated above knuckles).
+        # In contrast, in V the thumb is folded down across palm/ring finger.
         # ----------------------------------------------------------------
-        x_left = min(lm[5][0], lm[9][0]) - 0.08 * ref_scale
-        x_right = max(lm[5][0], lm[9][0]) + 0.08 * ref_scale
+        d_thumb_index_pip = float(np.linalg.norm(thumb_tip - lm[6]) / ref_scale)
+        d_thumb_middle_pip = float(np.linalg.norm(thumb_tip - lm[10]) / ref_scale)
+        d_thumb_middle_mcp = float(np.linalg.norm(thumb_tip - lm[9]) / ref_scale)
+
+        # X corridor spanning the index and middle fingers (from MCP through TIP)
+        x_min_idx = min(lm[5][0], lm[6][0], lm[8][0])
+        x_max_idx = max(lm[5][0], lm[6][0], lm[8][0])
+        x_min_mid = min(lm[9][0], lm[10][0], lm[12][0])
+        x_max_mid = max(lm[9][0], lm[10][0], lm[12][0])
+        x_left = min(x_min_idx, x_min_mid) - 0.06 * ref_scale
+        x_right = max(x_max_idx, x_max_mid) + 0.06 * ref_scale
+
+        is_thumb_in_finger_corridor = bool(x_left <= thumb_tip[0] <= x_right)
+
+        # Thumb is elevated (not folded flat onto ring/pinky finger)
+        is_thumb_elevated = bool(
+            (h_thumb > 0.04 or thumb_tip[1] < min(lm[5][1], lm[9][1]) + 0.08 * ref_scale)
+            and (is_thumb_pointing_up or v_thumb[1] < 0.0)
+        )
+
+        k_prox_thresh = float(h_cfg.get("k_thumb_proximity", 0.45))
+        is_thumb_near_im = bool(
+            (d_thumb_index_pip < k_prox_thresh or d_thumb_middle_pip < k_prox_thresh or d_thumb_middle_mcp < k_prox_thresh)
+            and is_thumb_in_finger_corridor
+        )
+
         is_thumb_between_index_middle = bool(
-            is_thumb_pointing_up
-            and x_left <= thumb_tip[0] <= x_right
-            and thumb_tip[1] < lm[5][1] + 0.10 * ref_scale
+            is_thumb_elevated
+            and (is_thumb_near_im or (is_thumb_in_finger_corridor and is_thumb_pointing_up))
         )
 
         # ----------------------------------------------------------------
@@ -277,6 +303,10 @@ class LandmarkNormalizer:
             "is_thumb_horizontal": is_thumb_horizontal,
             "is_thumb_pointing_down": is_thumb_pointing_down,
             "is_thumb_between_index_middle": is_thumb_between_index_middle,
+            "is_thumb_elevated": is_thumb_elevated,
+            "is_thumb_in_finger_corridor": is_thumb_in_finger_corridor,
+            "d_thumb_index_pip": d_thumb_index_pip,
+            "d_thumb_middle_pip": d_thumb_middle_pip,
             "thumb_extended_out": thumb_extended_out,
             "thumb_index_parallel": thumb_index_parallel,
             "dot_thumb_index": dot_thumb_index,

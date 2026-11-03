@@ -214,7 +214,7 @@ class GestureClassifier:
                 return "H", 0.95
 
             # K: Index+Middle UP, thumb points UP BETWEEN them
-            if m["is_thumb_between_index_middle"]:
+            if m["is_thumb_between_index_middle"] or (m.get("is_thumb_elevated") and m.get("is_thumb_in_finger_corridor")):
                 return "K", 0.95
 
             # R: Index+Middle both UP and CROSSED
