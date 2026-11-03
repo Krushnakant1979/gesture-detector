@@ -3,17 +3,24 @@ camera:
   width: 1280
   height: 720
   fps: 30
+  reconnect_timeout_sec: 2.0
 
 tracker:
   model_path: "models/hand_landmarker.task"
+  running_mode: "video"   # "video" for ultra-fast temporal tracking, "image" for single-frame
   max_num_hands: 1
   min_detection_confidence: 0.65
   min_presence_confidence: 0.55
   min_tracking_confidence: 0.55
   box_padding: 20
 
+filter:
+  smoothing_alpha: 0.65    # Exponential Moving Average smoothing factor (0.01 to 1.0)
+  enable_smoothing: true
+  enable_trajectory: true  # Dynamic stroke tracking for J and Z signs
+
 debouncer:
-  consecutive_frames: 4   # Fast 4-frame response
+  consecutive_frames: 4    # Fast 4-frame response
   history_length: 8
 
 visualizer:
@@ -24,6 +31,25 @@ visualizer:
   box_padding: 20
 
 classifier:
-  mode: "heuristic"  # Use precision biomechanical rules
+  mode: "hybrid"           # "hybrid" (heuristic + ML fallback), "heuristic", or "ml"
   model_path: "models/gesture_classifier.pkl"
   min_confidence: 0.70
+  ml_fallback_min_confidence: 0.75
+
+speller:
+  enable_tts: true         # Speak completed words aloud on [SPACE]
+  enable_autocomplete: true # Word suggestion HUD & [TAB] completion
+
+heuristics:
+  min_hand_span: 0.05
+  o_thumb_index_dist: 0.16
+  o_thumb_middle_dist: 0.20
+  o_thumb_ring_dist: 0.30
+  o_mcp5_wrist_dist: 0.65
+  q_thumb_index_dist: 0.40
+  q_index_down_offset: 0.18
+  u_v_spread_ratio: 1.25
+  l_thumb_horizontal_ratio: 0.85
+  fist_m_transverse: 0.55
+  fist_n_transverse: 0.35
+  fist_e_thumb_height: 0.02

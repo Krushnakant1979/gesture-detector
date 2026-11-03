@@ -1,6 +1,7 @@
 """
 Unit and Integration Tests for ASL Gesture Detection Pipeline
-Verifies normalizer, filters, classifier, visualizer, and tracker without needing a physical webcam.
+Verifies normalizer, filters, classifier, visualizer, tracker, and assistive modules
+without needing a physical webcam.
 """
 
 from __future__ import annotations
@@ -17,7 +18,12 @@ os.environ["MPLCONFIGDIR"] = tempfile.gettempdir()
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.classifier import GestureClassifier
-from src.filters import ExponentialMovingAverage, GestureDebouncer
+from src.filters import (
+    ExponentialMovingAverage,
+    GestureDebouncer,
+    StrokeTrajectoryTracker,
+    WordPredictor,
+)
 from src.normalizer import LandmarkNormalizer
 from src.tracker import HandData, HandTracker
 from src.visualizer import ModernVisualizer
@@ -55,7 +61,7 @@ def test_debouncer_stabilization():
 
 
 def test_visualizer_rendering():
-    """Verifies ASL HUD and skeleton drawing on a synthetic frame."""
+    """Verifies ASL HUD, suggestions, and skeleton drawing on a synthetic frame."""
     visualizer = ModernVisualizer()
     frame = np.zeros((720, 1280, 3), dtype=np.uint8)
 
@@ -73,14 +79,15 @@ def test_visualizer_rendering():
         active_letter="A",
         confidence=0.94,
         spelled_text="HELLO",
+        suggestions=["HELLO", "HELP"],
     )
     assert rendered.shape == (720, 1280, 3)
     assert rendered.dtype == np.uint8
 
 
 def test_tracker_initialization():
-    """Verifies MediaPipe HandTracker initializes and processes an empty image without crashing."""
-    tracker = HandTracker()
+    """Verifies MediaPipe HandTracker initializes in video mode and processes an empty image."""
+    tracker = HandTracker(running_mode="video")
     blank_image = np.zeros((480, 640, 3), dtype=np.uint8)
     hands = tracker.process(blank_image)
     assert isinstance(hands, list)
@@ -97,6 +104,39 @@ def test_asl_classifier():
     assert 0.0 <= conf <= 1.0
 
 
+def test_exponential_moving_average():
+    """Verifies EMA filter smooths coordinate noise."""
+    ema = ExponentialMovingAverage(alpha=0.5)
+    v1 = np.array([[1.0, 1.0, 1.0]], dtype=np.float32)
+    v2 = np.array([[2.0, 2.0, 2.0]], dtype=np.float32)
+
+    s1 = ema.update(v1)
+    np.testing.assert_allclose(s1, v1)
+
+    s2 = ema.update(v2)
+    np.testing.assert_allclose(s2, np.array([[1.5, 1.5, 1.5]], dtype=np.float32))
+
+    ema.reset()
+    assert ema.state is None
+
+
+def test_word_predictor():
+    """Verifies prefix auto-completion suggestions."""
+    predictor = WordPredictor()
+    suggestions = predictor.predict("HEL")
+    assert "HELLO" in suggestions or "HELP" in suggestions
+    assert len(suggestions) <= 3
+
+
+def test_stroke_trajectory_tracker():
+    """Verifies StrokeTrajectoryTracker resets and handles empty/normal inputs cleanly."""
+    tracker = StrokeTrajectoryTracker()
+    assert tracker.update(None) is None
+    dummy_lm = np.zeros((21, 3), dtype=np.float32)
+    assert tracker.update(dummy_lm) is None
+    tracker.reset()
+
+
 if __name__ == "__main__":
     print("Running self-checks...")
     test_normalizer_invariance()
@@ -109,4 +149,10 @@ if __name__ == "__main__":
     print("[PASS] Tracker test passed")
     test_asl_classifier()
     print("[PASS] ASL Classifier test passed")
+    test_exponential_moving_average()
+    print("[PASS] Exponential Moving Average test passed")
+    test_word_predictor()
+    print("[PASS] Word Predictor test passed")
+    test_stroke_trajectory_tracker()
+    print("[PASS] Stroke Trajectory Tracker test passed")
     print("\nAll ASL pipeline tests completed successfully!")

@@ -1,6 +1,7 @@
 """
 Hand Tracker Module using MediaPipe Tasks HandLandmarker
 Extracts 21 3D hand landmarks, handedness, and bounding boxes in real time.
+Supports RunningMode.VIDEO for low-latency temporal landmark tracking and RunningMode.IMAGE for static evaluation.
 """
 
 from __future__ import annotations
@@ -8,8 +9,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 import logging
 import os
+import time
 import urllib.request
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 import cv2
 import mediapipe as mp
 import numpy as np
@@ -33,19 +35,21 @@ class HandData:
 
 
 class HandTracker:
-    """Wrapper around MediaPipe HandLandmarker Tasks API with legacy fallback support."""
+    """Wrapper around MediaPipe HandLandmarker Tasks API with video temporal tracking."""
 
     def __init__(
         self,
         model_path: str = DEFAULT_MODEL_PATH,
         num_hands: int = 2,
-        min_detection_confidence: float = 0.6,
-        min_presence_confidence: float = 0.5,
-        min_tracking_confidence: float = 0.5,
+        min_detection_confidence: float = 0.65,
+        min_presence_confidence: float = 0.55,
+        min_tracking_confidence: float = 0.55,
         box_padding: int = 20,
+        running_mode: str = "video",
     ) -> None:
         self.box_padding = box_padding
         self.model_path = model_path
+        self.running_mode_str = running_mode.lower()
         self._ensure_model_exists(self.model_path)
 
         # Initialize MediaPipe Tasks HandLandmarker
@@ -56,16 +60,20 @@ class HandTracker:
             RunningMode,
         )
 
+        self._is_video_mode = (self.running_mode_str == "video")
+        mode = RunningMode.VIDEO if self._is_video_mode else RunningMode.IMAGE
+
         options = HandLandmarkerOptions(
             base_options=BaseOptions(model_asset_path=self.model_path),
-            running_mode=RunningMode.IMAGE,
+            running_mode=mode,
             num_hands=num_hands,
             min_hand_detection_confidence=min_detection_confidence,
             min_hand_presence_confidence=min_presence_confidence,
             min_tracking_confidence=min_tracking_confidence,
         )
         self.detector = HandLandmarker.create_from_options(options)
-        logger.info("MediaPipe HandLandmarker Tasks API initialized successfully.")
+        self._last_timestamp_ms: int = 0
+        logger.info("MediaPipe HandLandmarker initialized in %s mode.", "VIDEO" if self._is_video_mode else "IMAGE")
 
     @staticmethod
     def _ensure_model_exists(model_path: str) -> None:
@@ -76,12 +84,13 @@ class HandTracker:
             urllib.request.urlretrieve(MODEL_DOWNLOAD_URL, model_path)
             logger.info("Model download complete.")
 
-    def process(self, frame_bgr: np.ndarray) -> List[HandData]:
+    def process(self, frame_bgr: np.ndarray, timestamp_ms: Optional[int] = None) -> List[HandData]:
         """
         Processes a BGR image frame and extracts hand landmark data.
 
         Args:
             frame_bgr: Input video frame in OpenCV BGR format.
+            timestamp_ms: Monotonic millisecond timestamp (used in VIDEO mode).
 
         Returns:
             List of HandData objects for all detected hands.
@@ -92,7 +101,22 @@ class HandTracker:
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
 
-        result = self.detector.detect(mp_image)
+        if self._is_video_mode:
+            if timestamp_ms is None:
+                now_ms = int(time.time() * 1000)
+                if now_ms <= self._last_timestamp_ms:
+                    now_ms = self._last_timestamp_ms + 1
+                self._last_timestamp_ms = now_ms
+                timestamp_ms = now_ms
+            elif timestamp_ms <= self._last_timestamp_ms:
+                timestamp_ms = self._last_timestamp_ms + 1
+                self._last_timestamp_ms = timestamp_ms
+            else:
+                self._last_timestamp_ms = timestamp_ms
+
+            result = self.detector.detect_for_video(mp_image, timestamp_ms)
+        else:
+            result = self.detector.detect(mp_image)
 
         detected_hands: List[HandData] = []
         if not result or not result.hand_landmarks:
@@ -138,4 +162,7 @@ class HandTracker:
     def close(self) -> None:
         """Closes the MediaPipe detector instance."""
         if hasattr(self, "detector") and self.detector:
-            self.detector.close()
+            try:
+                self.detector.close()
+            except Exception:
+                pass

@@ -1,7 +1,7 @@
 """
 Visualizer Module for ASL Alphabet Recognition
 Renders high-fps, modern HUD graphics, illuminated ASL letter badges, finger state monitors,
-and interactive text spelling displays using OpenCV.
+word auto-completion suggestions, and interactive text spelling displays using OpenCV.
 """
 
 from __future__ import annotations
@@ -105,8 +105,9 @@ class ModernVisualizer:
         confidence: float,
         spelled_text: str = "",
         debug_info: Optional[Dict[str, any]] = None,
+        suggestions: Optional[List[str]] = None,
     ) -> np.ndarray:
-        """Renders the comprehensive ASL Alphabet HUD."""
+        """Renders the comprehensive ASL Alphabet HUD with auto-complete suggestions."""
         fps = self.update_fps()
         h, w, _ = frame.shape
 
@@ -139,8 +140,8 @@ class ModernVisualizer:
         cv2.putText(frame, f"FPS: {fps:.1f}", (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.7, fps_color, 2, cv2.LINE_AA)
         cv2.putText(frame, "ASL Fingerspelling Studio", (170, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2, cv2.LINE_AA)
 
-        controls_tip = "[Space]: Add Letter  |  [C]: Clear  |  [Q]: Quit"
-        cv2.putText(frame, controls_tip, (w - 440, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 180, 180), 1, cv2.LINE_AA)
+        controls_tip = "[Space]: Add  |  [Tab]: Auto-Complete  |  [C]: Clear  |  [Q]: Quit"
+        cv2.putText(frame, controls_tip, (w - 530, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (180, 180, 180), 1, cv2.LINE_AA)
 
         # 3. Prominent ASL Alphabet Badge (Top-Left under Header)
         is_active = active_letter not in ("None", "-", "Unknown")
@@ -154,7 +155,6 @@ class ModernVisualizer:
 
         cv2.putText(frame, "DETECTED LETTER", (badge_x + 18, badge_y + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (170, 170, 170), 1, cv2.LINE_AA)
 
-        # Large Letter Character
         disp_char = active_letter if is_active else "-"
         char_color = self.theme_color if is_active else (100, 100, 100)
         cv2.putText(frame, disp_char, (badge_x + 80, badge_y + 82), cv2.FONT_HERSHEY_DUPLEX, 1.8, char_color, 3, cv2.LINE_AA)
@@ -173,11 +173,13 @@ class ModernVisualizer:
         # 4. Finger State Status Indicators (Below Badge)
         if debug_info:
             status_y = badge_y + badge_h + 15
-            finger_names = [("T", debug_info.get("thumb_out", False) or debug_info.get("thumb_side", False)),
-                            ("I", debug_info.get("ext_index", False)),
-                            ("M", debug_info.get("ext_middle", False)),
-                            ("R", debug_info.get("ext_ring", False)),
-                            ("P", debug_info.get("ext_pinky", False))]
+            finger_names = [
+                ("T", debug_info.get("thumb_extended_out", False) or debug_info.get("is_thumb_pointing_up", False)),
+                ("I", debug_info.get("ext_index", False)),
+                ("M", debug_info.get("ext_middle", False)),
+                ("R", debug_info.get("ext_ring", False)),
+                ("P", debug_info.get("ext_pinky", False)),
+            ]
 
             cv2.putText(frame, "Fingers:", (badge_x, status_y + 14), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (180, 180, 180), 1, cv2.LINE_AA)
             for i, (fn, state) in enumerate(finger_names):
@@ -187,12 +189,21 @@ class ModernVisualizer:
                 text_col = (0, 0, 0) if state else (160, 160, 160)
                 cv2.putText(frame, fn, (f_box_x + 6, status_y + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.45, text_col, 1, cv2.LINE_AA)
 
-        # 5. Bottom Spelled Word / Sentence Bar
+        # 5. Suggestions Strip (Directly above Bottom Bar)
         bar_bottom_h = 65
         bar_bottom_y = h - bar_bottom_h - 15
         bar_bottom_x = 20
         bar_bottom_w = w - 40
 
+        if suggestions:
+            sug_y = bar_bottom_y - 28
+            s_overlay = frame.copy()
+            cv2.rectangle(s_overlay, (bar_bottom_x, sug_y), (bar_bottom_x + bar_bottom_w, sug_y + 24), (24, 24, 24), -1)
+            cv2.addWeighted(s_overlay, 0.80, frame, 0.20, 0, frame)
+            sug_text = "Suggestions [TAB to complete]: " + "   |   ".join(suggestions)
+            cv2.putText(frame, sug_text, (bar_bottom_x + 12, sug_y + 17), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 220, 255), 1, cv2.LINE_AA)
+
+        # 6. Bottom Spelled Word / Sentence Bar
         b_overlay = frame.copy()
         cv2.rectangle(b_overlay, (bar_bottom_x, bar_bottom_y), (bar_bottom_x + bar_bottom_w, bar_bottom_y + bar_bottom_h), (18, 18, 18), -1)
         cv2.addWeighted(b_overlay, 0.85, frame, 0.15, 0, frame)
@@ -200,7 +211,6 @@ class ModernVisualizer:
 
         cv2.putText(frame, "SPELLED TEXT:", (bar_bottom_x + 18, bar_bottom_y + 39), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (160, 160, 160), 2, cv2.LINE_AA)
 
-        # Spelled output text
         display_spelled = spelled_text if spelled_text else "Show an ASL sign & press SPACE to append..."
         spelled_color = (255, 255, 255) if spelled_text else (110, 110, 110)
         cv2.putText(frame, display_spelled, (bar_bottom_x + 195, bar_bottom_y + 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, spelled_color, 2, cv2.LINE_AA)
