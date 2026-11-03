@@ -458,6 +458,41 @@ def test_strict_n_gesture():
     res_p, _ = classifier.classify(user_p, handedness="Left")
     assert res_p == "P", f"Spread downward fingers should classify as P, got {res_p}"
 
+    # 4. User N2 image (2-finger drape) must classify as N
+    w2, h2 = 747.0, 612.0
+    user_n2 = np.zeros((21, 3), dtype=np.float32)
+    user_n2[0] = [399.0 / w2, 114.9 / h2, 0]
+    user_n2[1] = [303.1 / w2, 147.3 / h2, 0]
+    user_n2[2] = [248.9 / w2, 237.7 / h2, 0]
+    user_n2[3] = [263.9 / w2, 326.2 / h2, 0]
+    user_n2[4] = [324.1 / w2, 381.2 / h2, 0]
+    user_n2[5] = [275.9 / w2, 227.2 / h2, 0]
+    user_n2[6] = [282.2 / w2, 370.0 / h2, 0]
+    user_n2[7] = [292.4 / w2, 434.9 / h2, 0]
+    user_n2[8] = [301.5 / w2, 487.3 / h2, 0]
+    user_n2[9] = [361.4 / w2, 223.7 / h2, 0]
+    user_n2[10] = [356.8 / w2, 378.5 / h2, 0]
+    user_n2[11] = [350.7 / w2, 459.8 / h2, 0]
+    user_n2[12] = [351.1 / w2, 519.8 / h2, 0]
+    user_n2[13] = [433.4 / w2, 225.6 / h2, 0]
+    user_n2[14] = [398.9 / w2, 357.4 / h2, 0]
+    user_n2[15] = [372.2 / w2, 332.6 / h2, 0]
+    user_n2[16] = [367.6 / w2, 295.8 / h2, 0]
+    user_n2[17] = [487.3 / w2, 232.4 / h2, 0]
+    user_n2[18] = [436.3 / w2, 329.8 / h2, 0]
+    user_n2[19] = [412.1 / w2, 311.1 / h2, 0]
+    user_n2[20] = [411.0 / w2, 279.3 / h2, 0]
+
+    res_n2, conf_n2 = classifier.classify(user_n2, handedness="Left")
+    assert res_n2 == "N", f"User N2 gesture should classify as N, got {res_n2}"
+    assert conf_n2 >= 0.95
+
+    # Right-hand parity for user N2
+    user_n2_r = np.copy(user_n2)
+    user_n2_r[:, 0] = 1.0 - user_n2_r[:, 0]
+    res_n2_r, conf_n2_r = classifier.classify(user_n2_r, handedness="Right")
+    assert res_n2_r == "N", f"Right hand N2 should classify as N, got {res_n2_r}"
+
 
 def test_strict_o_gesture():
     """Verifies that all 4 fingertips converging to thumb detects O, rejecting open palms and F."""

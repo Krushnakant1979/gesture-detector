@@ -294,13 +294,16 @@ class LandmarkNormalizer:
         # ----------------------------------------------------------------
         # LETTER P: Downward K-shape (Index forward/down, Middle straight down)
         # Index points forward/horizontally or down; Middle points down.
-        # Index and middle are spread apart (d_im > 0.38).
+        # Index and middle are spread apart like a K/scissors (spread_ratio > 1.80).
         # Thumb rests near the middle finger joint.
         # Ring and pinky are folded (not pointing up).
         # Hand is turned horizontally or pointing down.
         # ----------------------------------------------------------------
         d_thumb_mid_pip = float(np.linalg.norm(thumb_tip - lm[10]) / ref_scale)
         d_thumb_mid_dip = float(np.linalg.norm(thumb_tip - lm[11]) / ref_scale)
+        d_tip_im = float(np.linalg.norm(lm[8][:2] - lm[12][:2]))
+        d_mcp_im = float(np.linalg.norm(lm[5][:2] - lm[9][:2]))
+        p_spread_ratio = float(d_tip_im / (d_mcp_im + 1e-5))
         is_P_shape = bool(
             ext_index
             and down_middle
@@ -308,8 +311,30 @@ class LandmarkNormalizer:
             and not up_ring
             and not up_pinky
             and d_index_middle_tip > 0.38
+            and p_spread_ratio > 1.80
             and (is_hand_horizontal or is_hand_pointing_down or horiz_index or down_index)
             and (d_thumb_mid_pip < 0.50 or d_thumb_mid_dip < 0.45 or d_thumb_middle_tip < 0.60)
+        )
+
+        # ----------------------------------------------------------------
+        # LETTER N: 2-finger forward drape (Index + Middle extended down together)
+        # Index and middle point downward together (down_index and down_middle).
+        # Ring and pinky are folded/curled (not extended down, not up).
+        # Index and middle are parallel and side-by-side (spread_ratio < 1.40).
+        # Middle extends significantly further down than ring (lm[12][1] > lm[16][1] + 0.12 * ref_scale).
+        # Thumb is tucked under/near index & middle (d_thumb_im < 0.85 or t_thumb < 0.50).
+        # ----------------------------------------------------------------
+        d_thumb_im_min = min(d_thumb_index_pip, d_thumb_middle_pip, d_thumb_index_tip)
+        is_N_shape = bool(
+            down_index
+            and down_middle
+            and not up_index
+            and not up_middle
+            and not up_ring
+            and not up_pinky
+            and p_spread_ratio < 1.40
+            and (lm[12][1] > lm[16][1] + 0.12 * ref_scale or lm[8][1] > lm[16][1] + 0.12 * ref_scale or d_middle_ring_tip > 0.80)
+            and (d_thumb_im_min < 0.85 or t_thumb < 0.50)
         )
 
         # ----------------------------------------------------------------
@@ -400,6 +425,7 @@ class LandmarkNormalizer:
             "is_C_shape": is_C_shape,
             "is_D_loop": is_D_loop,
             "is_L_shape": is_L_shape,
+            "is_N_shape": is_N_shape,
             "is_P_shape": is_P_shape,
             "is_Q_shape": is_Q_shape,
             # Inter-tip distances
