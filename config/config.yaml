@@ -42,9 +42,10 @@ speller:
 
 heuristics:
   min_hand_span: 0.05
-  o_thumb_index_dist: 0.16
-  o_thumb_middle_dist: 0.20
-  o_thumb_ring_dist: 0.30
+  o_thumb_index_dist: 0.36
+  o_thumb_middle_dist: 0.36
+  o_thumb_ring_dist: 0.38
+  o_thumb_pinky_dist: 0.45
   o_mcp5_wrist_dist: 0.65
   q_thumb_index_dist: 0.40
   q_index_down_offset: 0.18

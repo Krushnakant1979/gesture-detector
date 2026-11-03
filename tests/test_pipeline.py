@@ -459,6 +459,58 @@ def test_strict_n_gesture():
     assert res_p == "P", f"Spread downward fingers should classify as P, got {res_p}"
 
 
+def test_strict_o_gesture():
+    """Verifies that all 4 fingertips converging to thumb detects O, rejecting open palms and F."""
+    classifier = GestureClassifier(mode="heuristic")
+
+    w, h = 472.0, 520.0
+    user_o = np.zeros((21, 3), dtype=np.float32)
+    user_o[0] = [316.4/w, 479.2/h, 0]
+    user_o[1] = [210.0/w, 428.4/h, 0]
+    user_o[2] = [128.8/w, 348.9/h, 0]
+    user_o[3] = [68.8/w, 295.4/h, 0]
+    user_o[4] = [56.8/w, 234.2/h, 0]
+    user_o[5] = [241.4/w, 221.7/h, 0]
+    user_o[6] = [199.7/w, 124.1/h, 0]
+    user_o[7] = [144.1/w, 140.6/h, 0]
+    user_o[8] = [127.7/w, 190.5/h, 0]
+    user_o[9] = [274.7/w, 217.9/h, 0]
+    user_o[10] = [238.4/w, 111.6/h, 0]
+    user_o[11] = [178.5/w, 154.1/h, 0]
+    user_o[12] = [94.3/w, 190.2/h, 0]
+    user_o[13] = [305.8/w, 221.9/h, 0]
+    user_o[14] = [258.1/w, 149.3/h, 0]
+    user_o[15] = [124.7/w, 132.0/h, 0]
+    user_o[16] = [78.4/w, 177.7/h, 0]
+    user_o[17] = [328.4/w, 238.6/h, 0]
+    user_o[18] = [210.0/w, 102.2/h, 0]
+    user_o[19] = [124.7/w, 132.0/h, 0]
+    user_o[20] = [84.3/w, 165.3/h, 0]
+
+    # 1. User O image must classify as O
+    res_o, conf_o = classifier.classify(user_o, handedness="Left")
+    assert res_o == "O", f"User O gesture should classify as O, got {res_o}"
+    assert conf_o >= 0.95
+
+    # 2. Right-hand parity
+    user_o_right = np.copy(user_o)
+    user_o_right[:, 0] = 1.0 - user_o_right[:, 0]
+    res_o_r, conf_o_r = classifier.classify(user_o_right, handedness="Right")
+    assert res_o_r == "O", f"Right hand O should classify as O, got {res_o_r}"
+
+    # 3. Flat open palm must NOT classify as O
+    open_palm = np.zeros((21, 3), dtype=np.float32)
+    open_palm[0] = [0, 0, 0]
+    open_palm[5] = [0.15, -0.5, 0.0]
+    open_palm[8] = [0.25, -0.95, 0.0]
+    open_palm[12] = [0.0, -0.98, 0.0]
+    open_palm[16] = [-0.25, -0.95, 0.0]
+    open_palm[20] = [-0.40, -0.90, 0.0]
+    open_palm[4] = [0.65, -0.45, 0.0]
+    res_op, _ = classifier.classify(open_palm)
+    assert res_op != "O", f"Open palm should not be O, got {res_op}"
+
+
 if __name__ == "__main__":
     print("Running self-checks...")
     test_normalizer_invariance()
@@ -491,4 +543,6 @@ if __name__ == "__main__":
     print("[PASS] Strict M gesture test passed")
     test_strict_n_gesture()
     print("[PASS] Strict N gesture test passed")
+    test_strict_o_gesture()
+    print("[PASS] Strict O gesture test passed")
     print("\nAll ASL pipeline tests completed successfully!")

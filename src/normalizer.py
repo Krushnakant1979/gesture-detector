@@ -235,10 +235,13 @@ class LandmarkNormalizer:
 
         # ----------------------------------------------------------------
         # LETTER O: Fingertips converge to thumb tip in circle
+        # In O, all 4 fingertips converge to the thumb tip to form an open circle/loop.
+        # In contrast, in F only index touches thumb, and other fingers extend straight UP.
         # ----------------------------------------------------------------
-        o_ti_max = float(h_cfg.get("o_thumb_index_dist", 0.16))
-        o_tm_max = float(h_cfg.get("o_thumb_middle_dist", 0.20))
-        o_tr_max = float(h_cfg.get("o_thumb_ring_dist", 0.30))
+        o_ti_max = float(h_cfg.get("o_thumb_index_dist", 0.36))
+        o_tm_max = float(h_cfg.get("o_thumb_middle_dist", 0.36))
+        o_tr_max = float(h_cfg.get("o_thumb_ring_dist", 0.38))
+        o_tp_max = float(h_cfg.get("o_thumb_pinky_dist", 0.45))
         o_mcp5_min = float(h_cfg.get("o_mcp5_wrist_dist", 0.65))
 
         d_mcp5_wrist = float(np.linalg.norm(lm[5] - wrist) / ref_scale)
@@ -246,8 +249,9 @@ class LandmarkNormalizer:
             d_thumb_index_tip < o_ti_max
             and d_thumb_middle_tip < o_tm_max
             and d_thumb_ring_tip < o_tr_max
+            and d_thumb_pinky_tip < o_tp_max
             and d_mcp5_wrist > o_mcp5_min
-            and not up_pinky
+            and not (up_middle and up_ring and up_pinky)
         )
 
         # ----------------------------------------------------------------
