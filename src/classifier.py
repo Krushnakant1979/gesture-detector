@@ -173,7 +173,13 @@ class GestureClassifier:
             return "P", 0.96
 
         # ==============================================================
-        # PRIORITY 5 — Letter N (2-finger forward drape)
+        # PRIORITY 5 — Letter M (3-finger forward drape)
+        # ==============================================================
+        if m.get("is_M_shape"):
+            return "M", 0.96
+
+        # ==============================================================
+        # PRIORITY 6 — Letter N (2-finger forward drape)
         # ==============================================================
         if m.get("is_N_shape"):
             return "N", 0.96

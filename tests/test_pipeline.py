@@ -410,6 +410,41 @@ def test_strict_m_gesture():
     res_op, _ = classifier.classify(open_palm)
     assert res_op != "M", f"Open palm should not be M, got {res_op}"
 
+    # 4. User M2 image (3-finger forward drape) must classify as M
+    w2, h2 = 557.0, 655.0
+    user_m2 = np.zeros((21, 3), dtype=np.float32)
+    user_m2[0] = [351.2 / w2, 84.9 / h2, 0]
+    user_m2[1] = [232.5 / w2, 124.6 / h2, 0]
+    user_m2[2] = [135.1 / w2, 186.6 / h2, 0]
+    user_m2[3] = [83.9 / w2, 255.0 / h2, 0]
+    user_m2[4] = [115.8 / w2, 308.9 / h2, 0]
+    user_m2[5] = [150.1 / w2, 247.2 / h2, 0]
+    user_m2[6] = [138.0 / w2, 411.2 / h2, 0]
+    user_m2[7] = [128.8 / w2, 492.3 / h2, 0]
+    user_m2[8] = [124.5 / w2, 552.6 / h2, 0]
+    user_m2[9] = [232.5 / w2, 242.6 / h2, 0]
+    user_m2[10] = [227.7 / w2, 424.9 / h2, 0]
+    user_m2[11] = [224.8 / w2, 514.1 / h2, 0]
+    user_m2[12] = [226.6 / w2, 576.2 / h2, 0]
+    user_m2[13] = [315.1 / w2, 236.3 / h2, 0]
+    user_m2[14] = [322.5 / w2, 395.6 / h2, 0]
+    user_m2[15] = [317.8 / w2, 481.4 / h2, 0]
+    user_m2[16] = [318.2 / w2, 537.6 / h2, 0]
+    user_m2[17] = [385.5 / w2, 229.1 / h2, 0]
+    user_m2[18] = [359.9 / w2, 316.1 / h2, 0]
+    user_m2[19] = [342.5 / w2, 313.4 / h2, 0]
+    user_m2[20] = [331.7 / w2, 299.4 / h2, 0]
+
+    res_m2, conf_m2 = classifier.classify(user_m2, handedness="Left")
+    assert res_m2 == "M", f"User M2 gesture should classify as M, got {res_m2}"
+    assert conf_m2 >= 0.95
+
+    # Right-hand parity for user M2
+    user_m2_r = np.copy(user_m2)
+    user_m2_r[:, 0] = 1.0 - user_m2_r[:, 0]
+    res_m2_r, conf_m2_r = classifier.classify(user_m2_r, handedness="Right")
+    assert res_m2_r == "M", f"Right hand M2 should classify as M, got {res_m2_r}"
+
 
 def test_strict_n_gesture():
     """Verifies that 2 fingers draped forward detects N, rejecting P (spread) and open palms."""

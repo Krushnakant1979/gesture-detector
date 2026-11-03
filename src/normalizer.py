@@ -317,6 +317,29 @@ class LandmarkNormalizer:
         )
 
         # ----------------------------------------------------------------
+        # LETTER M: 3-finger forward drape (Index + Middle + Ring extended down together)
+        # Index, middle, and ring point downward together.
+        # Pinky is folded/curled in the fist (not extended down, not up).
+        # Index and middle are parallel and side-by-side (p_spread_ratio < 1.40).
+        # Ring finger extends down alongside middle (d_middle_ring_tip < 0.75 or y_rng > 0.80).
+        # Pinky tip is curled up far above ring tip (d_ring_pinky_tip > 0.60 or y_rng > y_pnk + 0.30 or lm[16][1] > lm[20][1] + 0.15 * ref_scale).
+        # ----------------------------------------------------------------
+        y_mid = float((lm[12][1] - lm[9][1]) / ref_scale)
+        y_rng = float((lm[16][1] - lm[13][1]) / ref_scale)
+        y_pnk = float((lm[20][1] - lm[17][1]) / ref_scale)
+        is_M_shape = bool(
+            down_index
+            and down_middle
+            and not up_index
+            and not up_middle
+            and not up_ring
+            and not up_pinky
+            and p_spread_ratio < 1.40
+            and (y_rng > 0.80 or d_middle_ring_tip < 0.75)
+            and (d_ring_pinky_tip > 0.60 or y_rng > y_pnk + 0.30 or lm[16][1] > lm[20][1] + 0.15 * ref_scale)
+        )
+
+        # ----------------------------------------------------------------
         # LETTER N: 2-finger forward drape (Index + Middle extended down together)
         # Index and middle point downward together (down_index and down_middle).
         # Ring and pinky are folded/curled (not extended down, not up).
@@ -333,6 +356,7 @@ class LandmarkNormalizer:
             and not up_ring
             and not up_pinky
             and p_spread_ratio < 1.40
+            and not is_M_shape
             and (lm[12][1] > lm[16][1] + 0.12 * ref_scale or lm[8][1] > lm[16][1] + 0.12 * ref_scale or d_middle_ring_tip > 0.80)
             and (d_thumb_im_min < 0.85 or t_thumb < 0.50)
         )
@@ -425,6 +449,7 @@ class LandmarkNormalizer:
             "is_C_shape": is_C_shape,
             "is_D_loop": is_D_loop,
             "is_L_shape": is_L_shape,
+            "is_M_shape": is_M_shape,
             "is_N_shape": is_N_shape,
             "is_P_shape": is_P_shape,
             "is_Q_shape": is_Q_shape,
