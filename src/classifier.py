@@ -237,11 +237,20 @@ class GestureClassifier:
         # GROUP C — Two extended fingers (P, H, K, R, V, U)
         # ==============================================================
         if num_ext == 2 and idx_ext and mid_ext and not rng_ext and not pnk_ext:
-            # P: Both index+middle point DOWNWARD
-            if (idx_down and mid_down) and d_ti > 0.22:
-                return "P", 0.95
-            if m["is_hand_pointing_down"] and (idx_down or mid_down) and d_ti > 0.22:
-                return "P", 0.95
+            # P vs N (fingers pointing downward):
+            # N: Index + Middle parallel and together (2-finger forward drape)
+            # P: Index + Middle spread apart like downward K (spread_ratio >= 1.20)
+            is_downward_pair = bool(
+                (idx_down and mid_down)
+                or (m["is_hand_pointing_down"] and (idx_down or mid_down))
+            )
+            if is_downward_pair:
+                d_mcp_im = float(np.linalg.norm(lm[5] - lm[9]))
+                spread_ratio = (d_im * ref) / (d_mcp_im + 1e-5)
+                if spread_ratio < 1.20 or d_im < 0.30:
+                    return "N", 0.95
+                elif d_ti > 0.22:
+                    return "P", 0.95
 
             # H: Both fingers point HORIZONTALLY SIDEWAYS
             if (idx_horiz and mid_horiz) or m["is_hand_horizontal"]:

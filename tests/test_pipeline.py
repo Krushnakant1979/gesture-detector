@@ -411,6 +411,54 @@ def test_strict_m_gesture():
     assert res_op != "M", f"Open palm should not be M, got {res_op}"
 
 
+def test_strict_n_gesture():
+    """Verifies that 2 fingers draped forward detects N, rejecting P (spread) and open palms."""
+    classifier = GestureClassifier(mode="heuristic")
+
+    w, h = 650.0, 652.0
+    user_n = np.zeros((21, 3), dtype=np.float32)
+    user_n[0] = [406.2/w, 74.0/h, 0]
+    user_n[1] = [300.9/w, 104.5/h, 0]
+    user_n[2] = [210.8/w, 168.9/h, 0]
+    user_n[3] = [152.4/w, 241.0/h, 0]
+    user_n[4] = [138.9/w, 307.0/h, 0]
+    user_n[5] = [216.9/w, 237.7/h, 0]
+    user_n[6] = [211.0/w, 375.6/h, 0]
+    user_n[7] = [212.4/w, 444.8/h, 0]
+    user_n[8] = [215.4/w, 501.1/h, 0]
+    user_n[9] = [282.9/w, 253.4/h, 0]
+    user_n[10] = [272.1/w, 395.0/h, 0]
+    user_n[11] = [264.8/w, 477.8/h, 0]
+    user_n[12] = [264.9/w, 538.1/h, 0]
+    user_n[13] = [358.3/w, 260.0/h, 0]
+    user_n[14] = [364.0/w, 340.2/h, 0]
+    user_n[15] = [358.3/w, 300.1/h, 0]
+    user_n[16] = [355.0/w, 256.3/h, 0]
+    user_n[17] = [431.4/w, 247.7/h, 0]
+    user_n[18] = [420.9/w, 296.2/h, 0]
+    user_n[19] = [413.3/w, 260.3/h, 0]
+    user_n[20] = [408.9/w, 225.6/h, 0]
+
+    # 1. User N image must classify as N
+    res_n, conf_n = classifier.classify(user_n, handedness="Left")
+    assert res_n == "N", f"User N gesture should classify as N, got {res_n}"
+    assert conf_n >= 0.95
+
+    # 2. Right-hand parity
+    user_n_right = np.copy(user_n)
+    user_n_right[:, 0] = 1.0 - user_n_right[:, 0]
+    res_n_r, conf_n_r = classifier.classify(user_n_right, handedness="Right")
+    assert res_n_r == "N", f"Right hand N should classify as N, got {res_n_r}"
+
+    # 3. Spread downward fingers (P sign) must NOT classify as N
+    user_p = np.copy(user_n)
+    user_p[8] = [150.0/w, 501.1/h, 0]
+    user_p[12] = [330.0/w, 538.1/h, 0]
+    user_p[4] = [240.0/w, 350.0/h, 0]
+    res_p, _ = classifier.classify(user_p, handedness="Left")
+    assert res_p == "P", f"Spread downward fingers should classify as P, got {res_p}"
+
+
 if __name__ == "__main__":
     print("Running self-checks...")
     test_normalizer_invariance()
@@ -441,4 +489,6 @@ if __name__ == "__main__":
     print("[PASS] Strict L gesture test passed")
     test_strict_m_gesture()
     print("[PASS] Strict M gesture test passed")
+    test_strict_n_gesture()
+    print("[PASS] Strict N gesture test passed")
     print("\nAll ASL pipeline tests completed successfully!")
