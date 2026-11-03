@@ -32,7 +32,7 @@ class GestureClassifier:
     """Classifies hand gestures into ASL Alphabet characters (A-Z)."""
 
     TOPOLOGICAL_SIGNS = {
-        "O", "Q", "X", "B", "C", "W", "F", "L", "Y", "V", "U", "H", "P", "K", "R"
+        "A", "O", "Q", "X", "B", "C", "W", "F", "L", "Y", "V", "U", "H", "P", "K", "R"
     }
 
     def __init__(
@@ -283,15 +283,23 @@ class GestureClassifier:
                 return "N", 0.93
 
             # T: Thumb poked up between index and middle
-            if 0.08 <= t_thumb < fist_n and m["is_thumb_pointing_up"] and h_thumb > -0.05:
+            if 0.10 <= t_thumb < fist_n and m["is_thumb_pointing_up"] and h_thumb > 0.04 and abs(t_thumb - 0.22) < 0.12:
                 return "T", 0.94
 
-            # A: Thumb rests on side of index
-            if t_thumb < 0.20 and h_thumb > fist_e:
-                return "A", 0.95
+            # A: Thumb rests straight upright on the SIDE of the index finger
+            # - Thumb is on index side (t_thumb < 0.25, or negative when extended out)
+            # - Thumb points UP alongside index knuckle
+            # - Thumb is NOT wrapping horizontally across front (not S)
+            is_A = bool(
+                (t_thumb < 0.25 or d_thumb_index_mcp < 0.38)
+                and (h_thumb > fist_e or m["is_thumb_pointing_up"] or (lm[4][1] < lm[2][1]))
+                and not (m["is_thumb_horizontal"] and t_thumb > 0.15)
+            )
+            if is_A:
+                return "A", 0.96
 
             # S: Thumb wraps horizontally across front
-            if 0.12 <= t_thumb <= 0.42 and m["is_thumb_horizontal"] and not m["is_thumb_pointing_up"]:
+            if 0.12 <= t_thumb <= 0.50 and m["is_thumb_horizontal"] and not m["is_thumb_pointing_up"]:
                 return "S", 0.94
 
             # E: Thumb pressed under fingertips
@@ -299,9 +307,9 @@ class GestureClassifier:
                 return "E", 0.95
 
             # Fist fallbacks
-            if h_thumb > fist_e:
-                return "A", 0.88
+            if h_thumb > fist_e or m["is_thumb_pointing_up"]:
+                return "A", 0.92
             else:
-                return "E", 0.88
+                return "E", 0.90
 
         return "None", 0.0

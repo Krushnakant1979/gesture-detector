@@ -219,7 +219,10 @@ class LandmarkNormalizer:
         # LETTER X: Index hooked back
         # ----------------------------------------------------------------
         d_index_tip_mcp = float(np.linalg.norm(lm[8] - lm[5]) / ref_scale)
-        pip_elevated = bool(lm[6][1] < lm[5][1] - 0.15 * ref_scale)
+        pip_elevated = bool(
+            lm[6][1] < lm[5][1] - 0.15 * ref_scale
+            and lm[6][1] < lm[10][1] - 0.05 * ref_scale
+        )
         tip_hooked_down = bool(lm[8][1] > lm[6][1])
         index_hooked = bool(
             not ext_index
