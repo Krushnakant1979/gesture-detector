@@ -183,14 +183,24 @@ class GestureClassifier:
             if m["is_C_shape"]:
                 return "C", 0.95
 
-            # 2. B Shape: All 4 fingers straight UP together, thumb tucked across palm
+            # 2. B Shape: All 4 fingers straight UP together, thumb tucked across/against palm
             up_all_4 = bool(idx_up and mid_up and rng_up and pnk_up)
-            fingers_close = bool(d_im < 0.45 and d_mr < 0.45 and d_rp < 0.45)
-            if up_all_4 and fingers_close and (not thumb_out or t_thumb >= 0.05):
+            b_im_max = float(self.heuristics.get("b_finger_dist_im", 0.42))
+            b_mr_max = float(self.heuristics.get("b_finger_dist_mr", 0.42))
+            b_rp_max = float(self.heuristics.get("b_finger_dist_rp", 0.58))
+            fingers_close = bool(d_im < b_im_max and d_mr < b_mr_max and d_rp < b_rp_max)
+
+            # Thumb must be folded across or against the palm (strictly rejecting open hand / high-five thumb)
+            thumb_tucked = bool(
+                not thumb_out
+                or (t_thumb >= 0.05 and not m["is_thumb_horizontal"] and d_ti > 0.20)
+            )
+
+            if up_all_4 and fingers_close and thumb_tucked:
                 return "B", 0.95
 
             # 3. Any other 4-finger pose (like flat open palm / 5 with thumb out in Image 1):
-            # Strictly return None (never guess C!)
+            # Strictly return None (never guess C or B!)
             return "None", 0.0
 
         # ==============================================================

@@ -264,6 +264,46 @@ def test_c_vs_open_palm_distinction():
     assert conf_c >= 0.95
 
 
+def test_strict_b_gesture():
+    """Verifies that all 4 fingers straight UP together with thumb tucked detects B, rejecting open palms."""
+    classifier = GestureClassifier(mode="heuristic")
+
+    w, h = 527.0, 677.0
+    user_b = np.zeros((21, 3), dtype=np.float32)
+    user_b[0] = [299.5/w, 619.1/h, 0]
+    user_b[1] = [200.4/w, 586.7/h, 0]
+    user_b[2] = [126.9/w, 510.2/h, 0]
+    user_b[3] = [111.8/w, 435.4/h, 0]
+    user_b[4] = [150.8/w, 415.0/h, 0]
+    user_b[5] = [177.8/w, 349.1/h, 0]
+    user_b[6] = [171.9/w, 237.7/h, 0]
+    user_b[7] = [173.6/w, 168.5/h, 0]
+    user_b[8] = [178.1/w, 105.5/h, 0]
+    user_b[9] = [242.7/w, 339.2/h, 0]
+    user_b[10] = [228.9/w, 210.1/h, 0]
+    user_b[11] = [226.1/w, 131.9/h, 0]
+    user_b[12] = [221.7/w, 57.1/h, 0]
+    user_b[13] = [305.1/w, 355.7/h, 0]
+    user_b[14] = [294.9/w, 237.6/h, 0]
+    user_b[15] = [290.2/w, 164.1/h, 0]
+    user_b[16] = [285.8/w, 95.5/h, 0]
+    user_b[17] = [374.5/w, 392.9/h, 0]
+    user_b[18] = [374.5/w, 306.4/h, 0]
+    user_b[19] = [374.4/w, 249.6/h, 0]
+    user_b[20] = [369.8/w, 191.8/h, 0]
+
+    res_b, conf_b = classifier.classify(user_b, handedness="Left")
+    assert res_b == "B", f"User B gesture should classify as B, got {res_b}"
+    assert conf_b >= 0.95
+
+    # Thumb sticking out laterally should NOT classify as B
+    b_thumb_out = np.copy(user_b)
+    b_thumb_out[4] = [-0.1, 415.0/h, 0]
+    b_thumb_out[3] = [-0.05, 435.0/h, 0]
+    res_thumb_out, _ = classifier.classify(b_thumb_out, handedness="Left")
+    assert res_thumb_out == "None", f"B with thumb out should be None, got {res_thumb_out}"
+
+
 if __name__ == "__main__":
     print("Running self-checks...")
     test_normalizer_invariance()
@@ -288,4 +328,6 @@ if __name__ == "__main__":
     print("[PASS] Strict A gesture distinction test passed")
     test_c_vs_open_palm_distinction()
     print("[PASS] C vs Open Palm distinction test passed")
+    test_strict_b_gesture()
+    print("[PASS] Strict B gesture test passed")
     print("\nAll ASL pipeline tests completed successfully!")

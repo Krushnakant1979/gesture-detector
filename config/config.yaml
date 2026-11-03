@@ -54,3 +54,6 @@ heuristics:
   fist_m_transverse: 0.55
   fist_n_transverse: 0.35
   fist_e_thumb_height: 0.02
+  b_finger_dist_im: 0.42
+  b_finger_dist_mr: 0.42
+  b_finger_dist_rp: 0.58
