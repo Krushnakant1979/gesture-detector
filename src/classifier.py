@@ -250,23 +250,25 @@ class GestureClassifier:
         # GROUP D1 — Single index extended (G, L, D, Z)
         # ==============================================================
         if idx_ext and not mid_ext and not rng_ext and not pnk_ext:
-            # G: Index pointing SIDEWAYS, thumb parallel
-            if m["thumb_index_parallel"] or (idx_horiz and m["dot_thumb_index"] > 0.22 and not idx_up):
-                return "G", 0.95
-
-            # L: Index UP, thumb extended HORIZONTALLY
-            if idx_up and thumb_out and m["is_thumb_horizontal"]:
-                return "L", 0.96
-            if idx_up and thumb_out:
-                return "L", 0.94
-
-            # D: Index UP, middle loops to touch thumb
+            # 1. D: Index UP, middle loops to touch thumb (prioritize loop over L)
             if idx_up and m["is_D_loop"]:
                 return "D", 0.95
 
-            # Z / Index UP fallback
-            if idx_up:
+            # 2. G: Index pointing SIDEWAYS, thumb parallel
+            if m["thumb_index_parallel"] or (idx_horiz and m["dot_thumb_index"] > 0.22 and not idx_up):
+                return "G", 0.95
+
+            # 3. L: STRICT ASL L GESTURE
+            # Index points straight UP, thumb extended horizontally OUT forming an 'L'
+            if m["is_L_shape"]:
+                return "L", 0.96
+
+            # 4. Z / Index UP with tucked thumb
+            if idx_up and not thumb_out and d_ti < 0.45:
                 return "Z", 0.90
+
+            # Reject any ambiguous or unclassified index gesture
+            return "None", 0.0
 
         # ==============================================================
         # GROUP D2 — Single pinky extended (Y, J, I)

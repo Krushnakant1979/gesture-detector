@@ -96,7 +96,7 @@ class LandmarkNormalizer:
 
             is_ext_len = bool(d_tip_mcp > 0.42 * ref_scale)
             is_up = bool(is_ext_len and tip[1] < mcp[1] - 0.15 * ref_scale)
-            is_down = bool(is_ext_len and tip[1] > mcp[1] + 0.15 * ref_scale)
+            is_down = bool(d_tip_mcp > 0.55 * ref_scale and tip[1] > pip[1] + 0.12 * ref_scale)
 
             dx = abs(tip[0] - mcp[0])
             dy = abs(tip[1] - mcp[1])
@@ -286,6 +286,26 @@ class LandmarkNormalizer:
         )
 
         # ----------------------------------------------------------------
+        # LETTER L: Index UP, thumb extended OUT to the side in L-shape
+        # Index points straight UP (not hooked or pointing sideways).
+        # Thumb extends outward laterally (horizontal / perpendicular to index).
+        # Remaining fingers (middle, ring, pinky) are folded down.
+        # Thumb is not looping to touch middle finger (unlike D).
+        # ----------------------------------------------------------------
+        l_horiz_ratio = float(h_cfg.get("l_thumb_horizontal_ratio", 0.70))
+        is_L_shape = bool(
+            up_index
+            and not index_hooked
+            and not is_D_loop
+            and (thumb_extended_out or d_thumb_index_mcp > 0.48)
+            and (is_thumb_horizontal or abs(v_thumb[0]) > l_horiz_ratio * abs(v_thumb[1]))
+            and d_thumb_index_tip > 0.55
+            and d_thumb_middle_tip > 0.35
+            and not is_thumb_pointing_up
+            and not up_middle and not up_ring and not up_pinky
+        )
+
+        # ----------------------------------------------------------------
         # PINKY TILT
         # ----------------------------------------------------------------
         v_pinky_vec = lm[20] - wrist
@@ -331,6 +351,7 @@ class LandmarkNormalizer:
             "is_O_shape": is_O_shape,
             "is_C_shape": is_C_shape,
             "is_D_loop": is_D_loop,
+            "is_L_shape": is_L_shape,
             # Inter-tip distances
             "d_thumb_index_tip": d_thumb_index_tip,
             "d_thumb_middle_tip": d_thumb_middle_tip,

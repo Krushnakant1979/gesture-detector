@@ -304,6 +304,61 @@ def test_strict_b_gesture():
     assert res_thumb_out == "None", f"B with thumb out should be None, got {res_thumb_out}"
 
 
+def test_strict_l_gesture():
+    """Verifies that index up with horizontal thumb detects L, rejecting wrong gestures."""
+    classifier = GestureClassifier(mode="heuristic")
+
+    w, h = 836.0, 695.0
+    user_l = np.zeros((21, 3), dtype=np.float32)
+    user_l[0] = [545.0/w, 565.3/h, 0]
+    user_l[1] = [450.3/w, 553.9/h, 0]
+    user_l[2] = [342.6/w, 524.0/h, 0]
+    user_l[3] = [238.8/w, 527.8/h, 0]
+    user_l[4] = [160.9/w, 542.9/h, 0]
+    user_l[5] = [382.9/w, 335.4/h, 0]
+    user_l[6] = [362.0/w, 222.4/h, 0]
+    user_l[7] = [348.6/w, 147.0/h, 0]
+    user_l[8] = [342.5/w, 78.0/h, 0]
+    user_l[9] = [435.4/w, 323.9/h, 0]
+    user_l[10] = [454.8/w, 350.0/h, 0]
+    user_l[11] = [445.0/w, 380.0/h, 0]
+    user_l[12] = [436.7/w, 415.0/h, 0]
+    user_l[13] = [513.5/w, 344.8/h, 0]
+    user_l[14] = [520.0/w, 370.0/h, 0]
+    user_l[15] = [505.0/w, 400.0/h, 0]
+    user_l[16] = [493.8/w, 426.1/h, 0]
+    user_l[17] = [585.3/w, 349.0/h, 0]
+    user_l[18] = [590.0/w, 375.0/h, 0]
+    user_l[19] = [575.0/w, 405.0/h, 0]
+    user_l[20] = [556.7/w, 428.9/h, 0]
+
+    # 1. User L image must classify as L
+    res_l, conf_l = classifier.classify(user_l, handedness="Left")
+    assert res_l == "L", f"User L gesture should classify as L, got {res_l}"
+    assert conf_l >= 0.95
+
+    # 2. Right-hand parity
+    user_l_right = np.copy(user_l)
+    user_l_right[:, 0] = 1.0 - user_l_right[:, 0]
+    res_l_r, conf_l_r = classifier.classify(user_l_right, handedness="Right")
+    assert res_l_r == "L", f"Right hand L should classify as L, got {res_l_r}"
+
+    # 3. Wrong pose: index up, but thumb is pointing straight UP alongside index (NOT L)
+    wrong_thumb_up = np.copy(user_l)
+    wrong_thumb_up[4] = [342.6/w, 100.0/h, 0]
+    wrong_thumb_up[3] = [342.6/w, 200.0/h, 0]
+    res_thumb_up, _ = classifier.classify(wrong_thumb_up, handedness="Left")
+    assert res_thumb_up != "L", f"Thumb pointing straight up should not be L, got {res_thumb_up}"
+
+    # 4. Wrong pose: index up, but thumb curled into palm (like 1 / Z)
+    wrong_thumb_tucked = np.copy(user_l)
+    wrong_thumb_tucked[4] = [382.9/w, 400.0/h, 0]
+    wrong_thumb_tucked[3] = [382.9/w, 450.0/h, 0]
+    wrong_thumb_tucked[2] = [382.9/w, 480.0/h, 0]
+    res_thumb_tucked, _ = classifier.classify(wrong_thumb_tucked, handedness="Left")
+    assert res_thumb_tucked != "L", f"Tucked thumb should not be L, got {res_thumb_tucked}"
+
+
 if __name__ == "__main__":
     print("Running self-checks...")
     test_normalizer_invariance()
@@ -330,4 +385,6 @@ if __name__ == "__main__":
     print("[PASS] C vs Open Palm distinction test passed")
     test_strict_b_gesture()
     print("[PASS] Strict B gesture test passed")
+    test_strict_l_gesture()
+    print("[PASS] Strict L gesture test passed")
     print("\nAll ASL pipeline tests completed successfully!")
