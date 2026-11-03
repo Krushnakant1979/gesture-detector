@@ -211,7 +211,9 @@ class LandmarkNormalizer:
         are_index_middle_crossed = bool(
             up_index and up_middle
             and not is_hand_horizontal
-            and not is_thumb_between_index_middle
+            # Note: do NOT require 'not is_thumb_between_index_middle' here —
+            # in R the thumb can appear near the finger corridor because the fingers are
+            # crossed. The crossing geometry (crossed_by_x) is the true discriminator.
             and (crossed_by_x or d_index_middle_tip < 0.09)
         )
 

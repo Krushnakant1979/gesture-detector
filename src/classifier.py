@@ -250,23 +250,30 @@ class GestureClassifier:
             if is_downward_pair:
                 d_mcp_im = float(np.linalg.norm(lm[5] - lm[9]))
                 spread_ratio = (d_im * ref) / (d_mcp_im + 1e-5)
-                # N: fingers together, thumb NOT pinched to index (Q has d_ti < 0.40)
-                if (spread_ratio < 1.20 or d_im < 0.30) and d_ti > 0.35:
+                # N: fingers parallel and together — widened zone (< 1.60) to catch gestures
+                # that look like N but have a slightly wider spread than ideal.
+                # Thumb must NOT be pinched to index (Q has d_ti < 0.40).
+                if (spread_ratio < 1.60 or d_im < 0.35) and d_ti > 0.35:
                     return "N", 0.95
-                elif d_ti > 0.22:
+                # P: fingers spread clearly like scissors — require strict spread (>= 1.80)
+                elif spread_ratio >= 1.80 and d_ti > 0.22:
                     return "P", 0.95
+                # Gray zone (1.60-1.80): ambiguous, show nothing
+                return "None", 0.0
 
             # H: Both fingers point HORIZONTALLY SIDEWAYS
             if (idx_horiz and mid_horiz) or m["is_hand_horizontal"]:
                 return "H", 0.95
 
-            # K: Index+Middle UP, thumb points UP BETWEEN them
-            if m["is_thumb_between_index_middle"] or (m.get("is_thumb_elevated") and m.get("is_thumb_in_finger_corridor")):
-                return "K", 0.95
-
-            # R: Index+Middle both UP and CROSSED
+            # R: Index+Middle both UP and CROSSED — check BEFORE K.
+            # When fingers cross, the thumb may appear inside the corridor (→ K)
+            # but crossed geometry always wins: it's R, not K.
             if m["are_index_middle_crossed"]:
                 return "R", 0.95
+
+            # K: Index+Middle UP, thumb points UP BETWEEN them (only when NOT crossed)
+            if m["is_thumb_between_index_middle"] or (m.get("is_thumb_elevated") and m.get("is_thumb_in_finger_corridor")):
+                return "K", 0.95
 
             # V vs U: Both fingers UP
             if idx_up and mid_up:
