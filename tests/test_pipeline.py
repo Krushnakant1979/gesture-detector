@@ -511,6 +511,64 @@ def test_strict_o_gesture():
     assert res_op != "O", f"Open palm should not be O, got {res_op}"
 
 
+def test_strict_p_gesture():
+    """Verifies that downward K-shape detects P, distinguishing P from C, N, and open palm."""
+    classifier = GestureClassifier(mode="heuristic")
+
+    w, h = 782.0, 491.0
+    user_p = np.zeros((21, 3), dtype=np.float32)
+    user_p[0] = [597.9 / w, 167.7 / h, 0]
+    user_p[1] = [473.7 / w, 165.0 / h, 0]
+    user_p[2] = [353.5 / w, 193.8 / h, 0]
+    user_p[3] = [269.4 / w, 251.3 / h, 0]
+    user_p[4] = [212.5 / w, 301.4 / h, 0]
+    user_p[5] = [281.0 / w, 102.6 / h, 0]
+    user_p[6] = [183.9 / w, 200.6 / h, 0]
+    user_p[7] = [120.9 / w, 255.5 / h, 0]
+    user_p[8] = [66.8 / w, 299.9 / h, 0]
+    user_p[9] = [340.0 / w, 100.0 / h, 0]
+    user_p[10] = [269.4 / w, 251.3 / h, 0]
+    user_p[11] = [254.6 / w, 340.0 / h, 0]
+    user_p[12] = [259.1 / w, 401.2 / h, 0]
+    user_p[13] = [408.7 / w, 126.4 / h, 0]
+    user_p[14] = [367.1 / w, 335.1 / h, 0]
+    user_p[15] = [311.2 / w, 353.7 / h, 0]
+    user_p[16] = [300.8 / w, 408.5 / h, 0]
+    user_p[17] = [473.7 / w, 165.0 / h, 0]
+    user_p[18] = [401.2 / w, 278.8 / h, 0]
+    user_p[19] = [335.5 / w, 270.8 / h, 0]
+    user_p[20] = [347.7 / w, 373.9 / h, 0]
+
+    # 1. User P image must classify as P (heuristic and hybrid)
+    res_p, conf_p = classifier.classify(user_p, handedness="Left")
+    assert res_p == "P", f"User P gesture should classify as P, got {res_p}"
+    assert conf_p >= 0.95
+
+    clf_hybrid = GestureClassifier(mode="hybrid")
+    res_ph, conf_ph = clf_hybrid.classify(user_p, handedness="Left")
+    assert res_ph == "P", f"Hybrid classifier should classify as P, got {res_ph}"
+    assert conf_ph >= 0.95
+
+    # 2. Right-hand parity
+    user_p_right = np.copy(user_p)
+    user_p_right[:, 0] = 1.0 - user_p_right[:, 0]
+    res_pr, conf_pr = classifier.classify(user_p_right, handedness="Right")
+    assert res_pr == "P", f"Right hand P should classify as P, got {res_pr}"
+    assert conf_pr >= 0.95
+
+    # 3. Flat open palm must NOT classify as P
+    open_palm = np.zeros((21, 3), dtype=np.float32)
+    open_palm[0] = [0, 0, 0]
+    open_palm[5] = [0.15, -0.5, 0.0]
+    open_palm[8] = [0.25, -0.95, 0.0]
+    open_palm[12] = [0.0, -0.98, 0.0]
+    open_palm[16] = [-0.25, -0.95, 0.0]
+    open_palm[20] = [-0.40, -0.90, 0.0]
+    open_palm[4] = [0.65, -0.45, 0.0]
+    res_op, _ = classifier.classify(open_palm)
+    assert res_op != "P", f"Open palm should not be P, got {res_op}"
+
+
 if __name__ == "__main__":
     print("Running self-checks...")
     test_normalizer_invariance()
@@ -545,4 +603,6 @@ if __name__ == "__main__":
     print("[PASS] Strict N gesture test passed")
     test_strict_o_gesture()
     print("[PASS] Strict O gesture test passed")
+    test_strict_p_gesture()
+    print("[PASS] Strict P gesture test passed")
     print("\nAll ASL pipeline tests completed successfully!")
