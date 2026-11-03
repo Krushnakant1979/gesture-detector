@@ -287,13 +287,19 @@ class GestureClassifier:
                 return "T", 0.94
 
             # A: Thumb rests straight upright on the SIDE of the index finger
-            # - Thumb is on index side (t_thumb < 0.25, or negative when extended out)
-            # - Thumb points UP alongside index knuckle
-            # - Thumb is NOT wrapping horizontally across front (not S)
+            # STRICT CRITERIA:
+            # - Thumb MUST point UP: is_thumb_pointing_up is True
+            # - Thumb MUST NOT point horizontally: not is_thumb_horizontal
+            # - Thumb MUST NOT be extended out wide: not thumb_out (d_tim <= 0.40)
+            # - Thumb MUST be snug alongside index finger: d_tim <= 0.40 and t_thumb <= 0.22
+            # - Thumb tip is elevated along index knuckle: h_thumb > 0.04
             is_A = bool(
-                (t_thumb < 0.25 or d_thumb_index_mcp < 0.38)
-                and (h_thumb > fist_e or m["is_thumb_pointing_up"] or (lm[4][1] < lm[2][1]))
-                and not (m["is_thumb_horizontal"] and t_thumb > 0.15)
+                m["is_thumb_pointing_up"]
+                and not m["is_thumb_horizontal"]
+                and not thumb_out
+                and m["d_thumb_index_mcp"] <= 0.40
+                and t_thumb <= 0.22
+                and h_thumb > 0.04
             )
             if is_A:
                 return "A", 0.96
@@ -303,13 +309,10 @@ class GestureClassifier:
                 return "S", 0.94
 
             # E: Thumb pressed under fingertips
-            if h_thumb <= fist_e and t_thumb < fist_m:
+            if h_thumb <= fist_e and t_thumb < fist_m and not thumb_out:
                 return "E", 0.95
 
-            # Fist fallbacks
-            if h_thumb > fist_e or m["is_thumb_pointing_up"]:
-                return "A", 0.92
-            else:
-                return "E", 0.90
+            # If no defined fist gesture matches strictly, return None (never guess randomly)
+            return "None", 0.0
 
         return "None", 0.0

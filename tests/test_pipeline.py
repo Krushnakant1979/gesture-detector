@@ -175,6 +175,39 @@ def test_k_vs_v_distinction():
     assert v_letter == "V"
 
 
+def test_strict_a_gesture():
+    """Verifies that only an upright snug thumb produces 'A', and hitchhiker thumbs are rejected."""
+    classifier = GestureClassifier(mode="heuristic")
+
+    def make_fist_variant(thumb_mode: str) -> np.ndarray:
+        vec = np.zeros((21, 3), dtype=np.float32)
+        vec[0] = [0, 0, 0]
+        vec[5] = [-0.15, -0.5, 0.0]
+        vec[9] = [0.0, -0.52, 0.0]
+        vec[13] = [0.15, -0.5, 0.0]
+        vec[17] = [0.28, -0.45, 0.0]
+        for mcp_idx, tip_idx in [(5, 8), (9, 12), (13, 16), (17, 20)]:
+            vec[mcp_idx + 1] = [vec[mcp_idx][0], -0.60, 0.0]
+            vec[mcp_idx + 2] = [vec[mcp_idx][0], -0.52, 0.05]
+            vec[tip_idx] = [vec[mcp_idx][0], -0.42, 0.08]
+        vec[1] = [-0.15, -0.2, 0.0]
+        vec[2] = [-0.25, -0.35, 0.0]
+        vec[3] = [-0.25, -0.48, 0.0]
+        if thumb_mode == "upright_snug":  # True A sign
+            vec[4] = [-0.24, -0.62, 0.0]
+        else:  # Thumb sticking out wide horizontally (hitchhiker, Image 1)
+            vec[3] = [-0.45, -0.37, 0.0]
+            vec[4] = [-0.60, -0.38, 0.0]
+        return vec
+
+    true_a, conf_a = classifier.classify(make_fist_variant("upright_snug"))
+    assert true_a == "A"
+    assert conf_a >= 0.95
+
+    wrong_pose, _ = classifier.classify(make_fist_variant("thumb_out_horizontal"))
+    assert wrong_pose == "None"
+
+
 if __name__ == "__main__":
     print("Running self-checks...")
     test_normalizer_invariance()
@@ -195,4 +228,6 @@ if __name__ == "__main__":
     print("[PASS] Stroke Trajectory Tracker test passed")
     test_k_vs_v_distinction()
     print("[PASS] K vs V distinction test passed")
+    test_strict_a_gesture()
+    print("[PASS] Strict A gesture distinction test passed")
     print("\nAll ASL pipeline tests completed successfully!")
