@@ -26,43 +26,58 @@ class GestureDebouncer:
     """
     Suppresses single-frame misclassifications by requiring a gesture
     to appear consistently across consecutive frames before confirming state change.
+    Provides fast, low-latency lock-on while preventing single-frame flicker.
     """
 
-    def __init__(self, consecutive_frames: int = 4, history_length: int = 8) -> None:
+    def __init__(self, consecutive_frames: int = 3, history_length: int = 8) -> None:
         self.consecutive_frames = max(1, consecutive_frames)
         self.history: Deque[Tuple[str, float]] = deque(maxlen=max(self.consecutive_frames, history_length))
         self.current_gesture: str = "None"
         self.current_confidence: float = 0.0
+        self.none_counter: int = 0
 
     def update(self, raw_gesture: str, confidence: float) -> Tuple[str, float]:
         """
         Updates filter with newest raw prediction and returns debounced gesture state.
+        - Fast lock-on: confirms in consecutive_frames (~100ms at 30fps).
+        - Single-frame glitches are rejected.
+        - Graceful decay: requires 3 consecutive None frames before dropping held gesture.
         """
         self.history.append((raw_gesture, confidence))
 
-        if len(self.history) < self.consecutive_frames:
+        if raw_gesture == "None":
+            self.none_counter += 1
+            if self.none_counter >= 3:
+                self.current_gesture = "None"
+                self.current_confidence = 0.0
+            return self.current_gesture, self.current_confidence
+        else:
+            self.none_counter = 0
+
+        # Fast threshold: for high confidence (>= 0.90) or initial detection from None,
+        # use min(3, consecutive_frames) to ensure lightning-fast reaction.
+        req_frames = min(self.consecutive_frames, 3) if (self.current_gesture == "None" or confidence >= 0.92) else self.consecutive_frames
+
+        if len(self.history) < req_frames:
             return self.current_gesture, self.current_confidence
 
-        # Check the most recent N frames
-        recent = list(self.history)[-self.consecutive_frames:]
+        # Check the most recent req_frames
+        recent = list(self.history)[-req_frames:]
         recent_labels = [label for label, _ in recent]
 
-        # If all N recent frames match the same gesture
-        if len(set(recent_labels)) == 1:
+        # If all recent frames agree on the same gesture
+        if len(set(recent_labels)) == 1 and recent_labels[0] != "None":
             candidate = recent_labels[0]
             avg_conf = sum(conf for _, conf in recent) / len(recent)
             self.current_gesture = candidate
             self.current_confidence = avg_conf
         else:
-            # If current gesture is still dominant in the whole history buffer, maintain it
-            counts = Counter([label for label, _ in self.history])
-            most_common, freq = counts.most_common(1)[0]
-            if most_common == self.current_gesture and freq >= self.consecutive_frames:
-                pass  # Keep current
-            elif raw_gesture == "None":
-                # Quickly decay to None if nothing is detected
-                self.current_gesture = "None"
-                self.current_confidence = 0.0
+            # If current gesture is still dominant in the history buffer, maintain it
+            counts = Counter([label for label, _ in self.history if label != "None"])
+            if counts:
+                most_common, freq = counts.most_common(1)[0]
+                if most_common == self.current_gesture and freq >= req_frames:
+                    pass  # Keep current gesture steady
 
         return self.current_gesture, self.current_confidence
 
@@ -71,6 +86,7 @@ class GestureDebouncer:
         self.history.clear()
         self.current_gesture = "None"
         self.current_confidence = 0.0
+        self.none_counter = 0
 
 
 class ExponentialMovingAverage:
