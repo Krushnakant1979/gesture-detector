@@ -161,19 +161,10 @@ class GestureClassifier:
             return "X", 0.95
 
         # ==============================================================
-        # PRIORITY 3 — Letter Q
+        # PRIORITY 3 — Letter Q (Downward G-shape)
         # ==============================================================
-        q_ti_max = float(self.heuristics.get("q_thumb_index_dist", 0.40))
-        q_down_off = float(self.heuristics.get("q_index_down_offset", 0.18))
-        is_Q = bool(
-            (idx_down or (lm[8][1] > lm[5][1] + q_down_off * ref))
-            and (m["is_thumb_pointing_down"] or (lm[4][1] > lm[2][1] + 0.08 * ref))
-            and d_ti < q_ti_max
-            and not (idx_up or mid_up or rng_up or pnk_up)
-            and not m["is_O_shape"]
-        )
-        if is_Q:
-            return "Q", 0.95
+        if m.get("is_Q_shape"):
+            return "Q", 0.96
 
         # ==============================================================
         # PRIORITY 4 — Letter P (Downward K-shape)

@@ -252,6 +252,7 @@ class LandmarkNormalizer:
             and d_thumb_pinky_tip < o_tp_max
             and d_mcp5_wrist > o_mcp5_min
             and not (up_middle and up_ring and up_pinky)
+            and not (down_index and lm[8][1] > lm[5][1] + 0.15 * ref_scale)
         )
 
         # ----------------------------------------------------------------
@@ -309,6 +310,27 @@ class LandmarkNormalizer:
             and d_index_middle_tip > 0.38
             and (is_hand_horizontal or is_hand_pointing_down or horiz_index or down_index)
             and (d_thumb_mid_pip < 0.50 or d_thumb_mid_dip < 0.45 or d_thumb_middle_tip < 0.60)
+        )
+
+        # ----------------------------------------------------------------
+        # LETTER Q: Downward G-shape (Index & thumb pointing downward parallel)
+        # Index points down (lm[8][1] > lm[5][1] + 0.15 * ref_scale or down_index).
+        # Thumb points downward/horizontally alongside index.
+        # Thumb and index are parallel (thumb_index_parallel or dot_thumb_index > 0.60).
+        # Distance between thumb tip and index tip is small (d_thumb_index_tip < 0.40).
+        # Fingers are not pointing up: not (up_index or up_middle or up_ring or up_pinky).
+        # Index and middle are NOT spread wide apart (not scissors/P: d_index_middle_tip < 0.38).
+        # ----------------------------------------------------------------
+        is_Q_shape = bool(
+            (down_index or lm[8][1] > lm[5][1] + 0.15 * ref_scale)
+            and not up_index
+            and not up_middle
+            and not up_ring
+            and not up_pinky
+            and (thumb_index_parallel or dot_thumb_index > 0.60)
+            and d_thumb_index_tip < 0.40
+            and d_index_middle_tip < 0.38
+            and (lm[4][1] > lm[2][1] - 0.05 * ref_scale or is_thumb_pointing_down or is_thumb_horizontal)
         )
 
         # ----------------------------------------------------------------
@@ -379,6 +401,7 @@ class LandmarkNormalizer:
             "is_D_loop": is_D_loop,
             "is_L_shape": is_L_shape,
             "is_P_shape": is_P_shape,
+            "is_Q_shape": is_Q_shape,
             # Inter-tip distances
             "d_thumb_index_tip": d_thumb_index_tip,
             "d_thumb_middle_tip": d_thumb_middle_tip,

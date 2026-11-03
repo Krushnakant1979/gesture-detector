@@ -569,6 +569,64 @@ def test_strict_p_gesture():
     assert res_op != "P", f"Open palm should not be P, got {res_op}"
 
 
+def test_strict_q_gesture():
+    """Verifies that downward index and thumb pinch detects Q, distinguishing Q from O, P, N, and open palm."""
+    classifier = GestureClassifier(mode="heuristic")
+
+    w, h = 672.0, 506.0
+    user_q = np.zeros((21, 3), dtype=np.float32)
+    user_q[0] = [603.0 / w, 338.1 / h, 0]
+    user_q[1] = [456.0 / w, 368.8 / h, 0]
+    user_q[2] = [337.5 / w, 351.9 / h, 0]
+    user_q[3] = [253.8 / w, 364.1 / h, 0]
+    user_q[4] = [187.9 / w, 382.5 / h, 0]
+    user_q[5] = [377.9 / w, 215.5 / h, 0]
+    user_q[6] = [274.8 / w, 308.1 / h, 0]
+    user_q[7] = [228.0 / w, 365.4 / h, 0]
+    user_q[8] = [190.5 / w, 412.8 / h, 0]
+    user_q[9] = [363.2 / w, 163.1 / h, 0]
+    user_q[10] = [231.2 / w, 280.3 / h, 0]
+    user_q[11] = [184.6 / w, 362.7 / h, 0]
+    user_q[12] = [146.4 / w, 426.4 / h, 0]
+    user_q[13] = [337.8 / w, 142.2 / h, 0]
+    user_q[14] = [214.3 / w, 264.8 / h, 0]
+    user_q[15] = [168.9 / w, 349.7 / h, 0]
+    user_q[16] = [141.0 / w, 406.1 / h, 0]
+    user_q[17] = [337.8 / w, 142.2 / h, 0]
+    user_q[18] = [214.3 / w, 264.8 / h, 0]
+    user_q[19] = [168.9 / w, 349.7 / h, 0]
+    user_q[20] = [128.7 / w, 424.3 / h, 0]
+
+    # 1. User Q image must classify as Q (heuristic and hybrid)
+    res_q, conf_q = classifier.classify(user_q, handedness="Left")
+    assert res_q == "Q", f"User Q gesture should classify as Q, got {res_q}"
+    assert conf_q >= 0.95
+
+    clf_hybrid = GestureClassifier(mode="hybrid")
+    res_qh, conf_qh = clf_hybrid.classify(user_q, handedness="Left")
+    assert res_qh == "Q", f"Hybrid classifier should classify as Q, got {res_qh}"
+    assert conf_qh >= 0.95
+
+    # 2. Right-hand parity
+    user_q_right = np.copy(user_q)
+    user_q_right[:, 0] = 1.0 - user_q_right[:, 0]
+    res_qr, conf_qr = classifier.classify(user_q_right, handedness="Right")
+    assert res_qr == "Q", f"Right hand Q should classify as Q, got {res_qr}"
+    assert conf_qr >= 0.95
+
+    # 3. Flat open palm must NOT classify as Q
+    open_palm = np.zeros((21, 3), dtype=np.float32)
+    open_palm[0] = [0, 0, 0]
+    open_palm[5] = [0.15, -0.5, 0.0]
+    open_palm[8] = [0.25, -0.95, 0.0]
+    open_palm[12] = [0.0, -0.98, 0.0]
+    open_palm[16] = [-0.25, -0.95, 0.0]
+    open_palm[20] = [-0.40, -0.90, 0.0]
+    open_palm[4] = [0.65, -0.45, 0.0]
+    res_op, _ = classifier.classify(open_palm)
+    assert res_op != "Q", f"Open palm should not be Q, got {res_op}"
+
+
 if __name__ == "__main__":
     print("Running self-checks...")
     test_normalizer_invariance()
@@ -605,4 +663,6 @@ if __name__ == "__main__":
     print("[PASS] Strict O gesture test passed")
     test_strict_p_gesture()
     print("[PASS] Strict P gesture test passed")
+    test_strict_q_gesture()
+    print("[PASS] Strict Q gesture test passed")
     print("\nAll ASL pipeline tests completed successfully!")
