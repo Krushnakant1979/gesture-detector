@@ -46,10 +46,17 @@ class HandTracker:
         min_tracking_confidence: float = 0.55,
         box_padding: int = 20,
         running_mode: str = "video",
+        enable_clahe: bool = True,
+        clahe_clip_limit: float = 2.0,
+        clahe_tile_grid_size: Tuple[int, int] = (8, 8),
     ) -> None:
         self.box_padding = box_padding
         self.model_path = model_path
         self.running_mode_str = running_mode.lower()
+        self.enable_clahe = enable_clahe
+        self.clahe_clip_limit = clahe_clip_limit
+        self.clahe_tile_grid_size = clahe_tile_grid_size
+        self.clahe = cv2.createCLAHE(clipLimit=self.clahe_clip_limit, tileGridSize=self.clahe_tile_grid_size) if self.enable_clahe else None
         self._ensure_model_exists(self.model_path)
 
         # Initialize MediaPipe Tasks HandLandmarker
@@ -84,6 +91,24 @@ class HandTracker:
             urllib.request.urlretrieve(MODEL_DOWNLOAD_URL, model_path)
             logger.info("Model download complete.")
 
+    def preprocess_frame(self, frame_bgr: np.ndarray) -> np.ndarray:
+        """
+        Enhances localized contrast and edge definition in low-light and backlit environments
+        using Contrast Limited Adaptive Histogram Equalization (CLAHE) on the L-channel (LAB space).
+        """
+        if not self.enable_clahe or self.clahe is None or frame_bgr is None or frame_bgr.size == 0:
+            return frame_bgr
+
+        try:
+            lab = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2LAB)
+            l_chan, a_chan, b_chan = cv2.split(lab)
+            cl = self.clahe.apply(l_chan)
+            enhanced_lab = cv2.merge((cl, a_chan, b_chan))
+            return cv2.cvtColor(enhanced_lab, cv2.COLOR_LAB2BGR)
+        except Exception as e:
+            logger.debug("CLAHE enhancement failed, falling back to raw frame: %s", e)
+            return frame_bgr
+
     def process(self, frame_bgr: np.ndarray, timestamp_ms: Optional[int] = None) -> List[HandData]:
         """
         Processes a BGR image frame and extracts hand landmark data.
@@ -95,10 +120,16 @@ class HandTracker:
         Returns:
             List of HandData objects for all detected hands.
         """
+        if frame_bgr is None or frame_bgr.size == 0:
+            return []
+
         h, w, _ = frame_bgr.shape
 
+        # Enhance frame contrast under poor/backlit lighting if CLAHE is enabled
+        processed_bgr = self.preprocess_frame(frame_bgr) if self.enable_clahe else frame_bgr
+
         # MediaPipe requires RGB format
-        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        frame_rgb = cv2.cvtColor(processed_bgr, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
 
         if self._is_video_mode:

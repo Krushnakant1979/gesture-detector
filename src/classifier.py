@@ -23,6 +23,7 @@ import pickle
 from typing import Any, Dict, Optional, Tuple
 import numpy as np
 
+from src.lstm_recognizer import LSTMRecurrentClassifier
 from src.normalizer import LandmarkNormalizer
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,8 @@ class GestureClassifier:
         min_confidence: float = 0.65,
         ml_fallback_min_confidence: float = 0.75,
         heuristics: Optional[Dict[str, Any]] = None,
+        enable_lstm: bool = True,
+        lstm_model_path: Optional[str] = "models/lstm_gesture_model.npz",
     ) -> None:
         self.mode = mode.lower()
         self.min_confidence = min_confidence
@@ -50,13 +53,30 @@ class GestureClassifier:
         self.normalizer = LandmarkNormalizer(heuristics=self.heuristics)
         self.ml_model = None
 
-        if model_path and os.path.exists(model_path):
-            try:
-                with open(model_path, "rb") as f:
-                    self.ml_model = pickle.load(f)
-                logger.info("Loaded ML model from %s", model_path)
-            except Exception as e:
-                logger.warning("Failed to load ML model from %s: %s", model_path, e)
+        # Preferred models: LightGBM -> Random Forest
+        candidate_paths = []
+        if model_path:
+            candidate_paths.append(model_path)
+        candidate_paths.extend(["models/lightgbm_classifier.pkl", "models/gesture_classifier.pkl"])
+
+        for path in candidate_paths:
+            if os.path.exists(path):
+                try:
+                    with open(path, "rb") as f:
+                        self.ml_model = pickle.load(f)
+                    model_type = "LightGBM" if "lightgbm" in path.lower() else "Random Forest"
+                    logger.info("Loaded %s model from %s", model_type, path)
+                    break
+                except Exception as e:
+                    logger.warning("Failed to load model from %s: %s", path, e)
+
+        # LSTMR Recurrent Gesture Sequence Recognizer for dynamic motions ('J', 'Z')
+        self.enable_lstm = enable_lstm
+        self.lstm_recognizer = None
+        if self.enable_lstm:
+            self.lstm_recognizer = LSTMRecurrentClassifier(
+                model_path=lstm_model_path if (lstm_model_path and os.path.exists(lstm_model_path)) else None
+            )
 
     def classify(
         self,
@@ -66,11 +86,18 @@ class GestureClassifier:
     ) -> Tuple[str, float]:
         """
         Classify 21 3D landmarks into an ASL letter.
-        Supports dynamic stroke overrides, heuristic rules, and ML cascade fallback.
+        Supports dynamic stroke overrides, LSTMR sequence recognition, heuristic rules, and ML cascade fallback.
         """
         # Dynamic gesture priority (e.g. traced 'Z' or 'J' strokes)
         if dynamic_gesture in ("J", "Z"):
             return dynamic_gesture, 0.98
+
+        # LSTMR Recurrent sequence evaluation for dynamic strokes
+        if self.lstm_recognizer is not None:
+            c_feat = self.normalizer.normalize(landmarks_3d, canonical=True, handedness=handedness)
+            lstm_res = self.lstm_recognizer.update(c_feat)
+            if lstm_res:
+                return lstm_res
 
         if self.mode == "ml" and self.ml_model is not None:
             return self._predict_ml(landmarks_3d)
@@ -90,6 +117,11 @@ class GestureClassifier:
             return h_letter, h_conf
 
         return self.classify_asl(landmarks_3d, handedness)
+
+    def reset_recurrent_state(self) -> None:
+        """Resets LSTMR sequence memory buffer."""
+        if self.lstm_recognizer:
+            self.lstm_recognizer.reset()
 
     def _predict_ml(self, landmarks_3d: np.ndarray) -> Tuple[str, float]:
         """Runs scikit-learn model inference on normalized coordinates."""
@@ -177,6 +209,13 @@ class GestureClassifier:
         # ==============================================================
         if m.get("is_N_shape"):
             return "N", 0.96
+
+        # ==============================================================
+        # PRIORITY 6 — Letter C (Arched C-cup formation)
+        # Checked with strict geometric guards rejecting open palms
+        # ==============================================================
+        if m.get("is_C_shape"):
+            return "C", 0.96
 
         # ==============================================================
         # GROUP A — Four extended fingers (B, C)

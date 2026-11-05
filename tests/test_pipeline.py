@@ -21,9 +21,11 @@ from src.classifier import GestureClassifier
 from src.filters import (
     ExponentialMovingAverage,
     GestureDebouncer,
+    OneEuroFilter,
     StrokeTrajectoryTracker,
     WordPredictor,
 )
+from src.lstm_recognizer import LSTMRecurrentClassifier
 from src.normalizer import LandmarkNormalizer
 from src.tracker import HandData, HandTracker
 from src.visualizer import ModernVisualizer
@@ -262,6 +264,41 @@ def test_c_vs_open_palm_distinction():
     res_c, conf_c = classifier.classify(true_c)
     assert res_c == "C", f"True C should be classified as C, got {res_c}"
     assert conf_c >= 0.95
+
+    # 3. User C screenshot gesture
+    w_c, h_c = 775.0, 547.0
+    user_c = np.zeros((21, 3), dtype=np.float32)
+    user_c[0] = [531.2 / w_c, 385.2 / h_c, 0]
+    user_c[1] = [437.8 / w_c, 391.5 / h_c, 0]
+    user_c[2] = [338.8 / w_c, 372.7 / h_c, 0]
+    user_c[3] = [267.0 / w_c, 372.8 / h_c, 0]
+    user_c[4] = [232.5 / w_c, 339.6 / h_c, 0]
+    user_c[5] = [341.9 / w_c, 222.9 / h_c, 0]
+    user_c[6] = [300.0 / w_c, 119.1 / h_c, 0]
+    user_c[7] = [236.5 / w_c, 155.0 / h_c, 0]
+    user_c[8] = [200.8 / w_c, 182.9 / h_c, 0]
+    user_c[9] = [376.5 / w_c, 206.2 / h_c, 0]
+    user_c[10] = [314.8 / w_c, 125.0 / h_c, 0]
+    user_c[11] = [262.4 / w_c, 128.9 / h_c, 0]
+    user_c[12] = [223.2 / w_c, 166.3 / h_c, 0]
+    user_c[13] = [417.1 / w_c, 197.6 / h_c, 0]
+    user_c[14] = [358.5 / w_c, 115.1 / h_c, 0]
+    user_c[15] = [300.0 / w_c, 119.1 / h_c, 0]
+    user_c[16] = [256.6 / w_c, 152.8 / h_c, 0]
+    user_c[17] = [457.3 / w_c, 204.9 / h_c, 0]
+    user_c[18] = [391.5 / w_c, 152.5 / h_c, 0]
+    user_c[19] = [336.2 / w_c, 143.8 / h_c, 0]
+    user_c[20] = [291.0 / w_c, 152.8 / h_c, 0]
+
+    res_user_c, conf_user_c = classifier.classify(user_c, handedness="Left")
+    assert res_user_c == "C", f"User C gesture should classify as C, got {res_user_c}"
+    assert conf_user_c >= 0.95
+
+    # Right-hand parity
+    user_c_right = np.copy(user_c)
+    user_c_right[:, 0] = 1.0 - user_c_right[:, 0]
+    res_user_c_r, _ = classifier.classify(user_c_right, handedness="Right")
+    assert res_user_c_r == "C", f"Right hand C should classify as C, got {res_user_c_r}"
 
 
 def test_strict_b_gesture():
@@ -662,20 +699,107 @@ def test_strict_q_gesture():
     assert res_op != "Q", f"Open palm should not be Q, got {res_op}"
 
 
+def test_one_euro_filter():
+    """Verifies that 1€ Filter adapts cutoff frequency, suppresses stationary jitter, and tracks fast motions."""
+    filter1 = OneEuroFilter(min_cutoff=1.0, beta=0.007, d_cutoff=1.0)
+
+    # 1. Stationary coordinates with sensor noise
+    base = np.array([0.5, 0.5, 0.0], dtype=np.float32)
+    filtered = []
+    t = 0.0
+    for i in range(20):
+        noisy = base + np.random.normal(0, 0.01, 3).astype(np.float32)
+        out = filter1.update(noisy, timestamp=t)
+        filtered.append(out)
+        t += 0.033
+
+    diffs = np.diff(np.array(filtered), axis=0)
+    assert np.mean(np.abs(diffs)) < 0.02, "1€ filter should heavily dampen stationary jitter"
+
+    # 2. Fast step transition
+    step_target = np.array([1.5, 2.0, 0.0], dtype=np.float32)
+    out_step = filter1.update(step_target, timestamp=t + 0.033)
+    assert np.linalg.norm(out_step - base) > 0.4, "1€ filter should rapidly open cutoff for fast motion"
+
+
+def test_3d_canonical_alignment():
+    """Verifies that 3D Canonical Alignment produces identical landmarks under roll, pitch, and yaw."""
+    normalizer = LandmarkNormalizer()
+    np.random.seed(42)
+    hand = np.random.uniform(-0.5, 0.5, (21, 3)).astype(np.float32)
+    hand[0] = [0, 0, 0]
+    hand[9] = [0, 1.0, 0]
+    hand[5] = [0.3, 0.9, 0]
+    hand[17] = [-0.3, 0.8, 0]
+
+    # Create 3D rotation matrix
+    theta = 0.65
+    axis = np.array([0.4, 0.7, -0.3], dtype=np.float32)
+    axis /= np.linalg.norm(axis)
+    K = np.array([[0, -axis[2], axis[1]], [axis[2], 0, -axis[0]], [-axis[1], axis[0], 0]])
+    R_rot = np.eye(3) + np.sin(theta) * K + (1.0 - np.cos(theta)) * (K @ K)
+
+    hand_rotated = hand @ R_rot.T
+
+    canonical_orig, _ = normalizer.canonical_align(hand, "Right")
+    canonical_rot, _ = normalizer.canonical_align(hand_rotated, "Right")
+
+    np.testing.assert_allclose(canonical_orig, canonical_rot, atol=1e-4)
+
+
+def test_clahe_preprocessing():
+    """Verifies that CLAHE contrast enhancement runs and preserves image dimensions."""
+    tracker = HandTracker(running_mode="image", enable_clahe=True, clahe_clip_limit=2.0)
+    dark_frame = np.full((100, 100, 3), 30, dtype=np.uint8)
+    enhanced = tracker.preprocess_frame(dark_frame)
+    assert enhanced.shape == dark_frame.shape
+    assert enhanced.dtype == np.uint8
+    tracker.close()
+
+
+def test_lightgbm_and_lstm():
+    """Verifies that LightGBM classifier loads and LSTMR sequence recognizer executes."""
+    # LightGBM classifier
+    if os.path.exists("models/lightgbm_classifier.pkl"):
+        classifier = GestureClassifier(mode="ml", model_path="models/lightgbm_classifier.pkl")
+        assert classifier.ml_model is not None
+        dummy_landmarks = np.zeros((21, 3), dtype=np.float32)
+        letter, conf = classifier.classify(dummy_landmarks)
+        assert isinstance(letter, str)
+        assert isinstance(conf, float)
+
+    # LSTMR sequence recognizer
+    lstm = LSTMRecurrentClassifier(input_size=63, hidden_size=48, window_size=16)
+    dummy_feat = np.random.randn(63).astype(np.float32)
+    for _ in range(16):
+        res = lstm.update(dummy_feat)
+    assert lstm.sequence_buffer.maxlen == 16
+    lstm.reset()
+    assert len(lstm.sequence_buffer) == 0
+
+
 if __name__ == "__main__":
     print("Running self-checks...")
     test_normalizer_invariance()
     print("[PASS] Normalizer test passed")
+    test_3d_canonical_alignment()
+    print("[PASS] 3D Canonical Alignment test passed")
     test_debouncer_stabilization()
     print("[PASS] Debouncer test passed")
     test_visualizer_rendering()
     print("[PASS] Visualizer test passed")
     test_tracker_initialization()
     print("[PASS] Tracker test passed")
+    test_clahe_preprocessing()
+    print("[PASS] CLAHE Preprocessing test passed")
     test_asl_classifier()
     print("[PASS] ASL Classifier test passed")
+    test_lightgbm_and_lstm()
+    print("[PASS] LightGBM and LSTMR test passed")
     test_exponential_moving_average()
     print("[PASS] Exponential Moving Average test passed")
+    test_one_euro_filter()
+    print("[PASS] 1€ (One Euro) Filter test passed")
     test_word_predictor()
     print("[PASS] Word Predictor test passed")
     test_stroke_trajectory_tracker()

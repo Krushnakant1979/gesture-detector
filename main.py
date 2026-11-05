@@ -19,6 +19,7 @@ from src.classifier import GestureClassifier
 from src.filters import (
     ExponentialMovingAverage,
     GestureDebouncer,
+    OneEuroFilter,
     StrokeTrajectoryTracker,
     TextToSpeech,
     WordPredictor,
@@ -103,7 +104,7 @@ def main() -> None:
         reconnect_timeout_sec=cam_cfg.get("reconnect_timeout_sec", 2.0),
     )
 
-    # 2. Initialize Hand Tracker with Video Mode
+    # 2. Initialize Hand Tracker with Video Mode and CLAHE Low-Light Preprocessing
     track_cfg = config.get("tracker", {})
     tracker = HandTracker(
         model_path=track_cfg.get("model_path", "models/hand_landmarker.task"),
@@ -113,23 +114,36 @@ def main() -> None:
         min_tracking_confidence=track_cfg.get("min_tracking_confidence", 0.55),
         box_padding=track_cfg.get("box_padding", 20),
         running_mode=track_cfg.get("running_mode", "video"),
+        enable_clahe=track_cfg.get("enable_clahe", True),
+        clahe_clip_limit=track_cfg.get("clahe_clip_limit", 2.0),
     )
 
-    # 3. Filters, Smoothers & Trajectory Recognizers
+    # 3. Filters, Smoothers & Trajectory Recognizers (1€ Adaptive Filter or EMA)
     filter_cfg = config.get("filter", {})
     enable_smoothing = filter_cfg.get("enable_smoothing", True)
-    landmark_smoother = ExponentialMovingAverage(alpha=filter_cfg.get("smoothing_alpha", 0.65))
+    filter_type = filter_cfg.get("type", "one_euro").lower()
+    if filter_type == "one_euro":
+        landmark_smoother = OneEuroFilter(
+            min_cutoff=filter_cfg.get("min_cutoff", 1.0),
+            beta=filter_cfg.get("beta", 0.007),
+            d_cutoff=filter_cfg.get("d_cutoff", 1.0),
+        )
+    else:
+        landmark_smoother = ExponentialMovingAverage(alpha=filter_cfg.get("smoothing_alpha", 0.60))
+
     stroke_tracker = StrokeTrajectoryTracker() if filter_cfg.get("enable_trajectory", True) else None
 
-    # 4. Initialize ASL Classifier & Normalizer with Config Heuristics
+    # 4. Initialize ASL Classifier & Normalizer with Config Heuristics & Models (LightGBM/RF & LSTMR)
     heuristics_cfg = config.get("heuristics", {})
     cls_cfg = config.get("classifier", {})
     classifier = GestureClassifier(
         mode=cls_cfg.get("mode", "hybrid"),
-        model_path=cls_cfg.get("model_path", "models/gesture_classifier.pkl"),
+        model_path=cls_cfg.get("model_path", "models/lightgbm_classifier.pkl"),
         min_confidence=cls_cfg.get("min_confidence", 0.70),
         ml_fallback_min_confidence=cls_cfg.get("ml_fallback_min_confidence", 0.75),
         heuristics=heuristics_cfg,
+        enable_lstm=cls_cfg.get("enable_lstm", True),
+        lstm_model_path=cls_cfg.get("lstm_model_path", "models/lstm_gesture_model.npz"),
     )
     normalizer = LandmarkNormalizer(heuristics=heuristics_cfg)
 
@@ -164,7 +178,7 @@ def main() -> None:
         return
 
     logger.info("ASL Studio running. Show ASL signs (A-Z) in front of the camera.")
-    logger.info("Controls: [SPACE] Add Letter | [TAB] Auto-Complete | [C] Clear | [BACKSPACE] Delete | [Q/ESC] Quit")
+    logger.info("Controls: [SPACE] Add Letter | [TAB] Auto-Complete | [R] Record Sample | [C] Clear | [BACKSPACE] Delete | [Q/ESC] Quit")
 
     spelled_text = ""
 
@@ -267,6 +281,19 @@ def main() -> None:
                     tts.speak(top_word)
             elif key in (ord("c"), ord("C")):  # 'C': Clear
                 spelled_text = ""
+            elif key in (ord("r"), ord("R")):  # 'R': Record real-world landmark sample for current gesture
+                if hands and active_letter not in ("None", "-", "Unknown"):
+                    import csv
+                    rec_csv = "data/real_world_landmarks.csv"
+                    os.makedirs("data", exist_ok=True)
+                    if not os.path.exists(rec_csv):
+                        with open(rec_csv, "w", newline="", encoding="utf-8") as f:
+                            csv.writer(f).writerow(["label", "handedness"] + [f"c{i}" for i in range(63)] + [f"n{i}" for i in range(63)])
+                    c_lm, _ = normalizer.canonical_align(hands[0].landmarks_normalized, handedness=effective_handedness)
+                    n_lm = normalizer.normalize(hands[0].landmarks_normalized)
+                    with open(rec_csv, "a", newline="", encoding="utf-8") as f:
+                        csv.writer(f).writerow([active_letter, effective_handedness] + c_lm.flatten().tolist() + n_lm.tolist())
+                    logger.info("Captured real-world training sample for '%s' -> %s", active_letter, rec_csv)
             elif key in (8, 127):  # Backspace
                 spelled_text = spelled_text[:-1]
 

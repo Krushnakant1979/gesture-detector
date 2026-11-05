@@ -89,6 +89,88 @@ class GestureDebouncer:
         self.none_counter = 0
 
 
+class OneEuroFilter:
+    """
+    Adaptive 1€ (One Euro) Filter for low-latency, jitter-free landmark smoothing.
+    Automatically adapts cutoff frequency based on movement speed:
+    - Low speed (holding still): applies high filtering to eliminate tremor/jitter.
+    - High speed (moving hand): increases cutoff frequency for zero-lag tracking.
+    Ref: Casiez, G., Roussel, N. and Vogel, D. (CHI 2012)
+    """
+
+    def __init__(
+        self,
+        min_cutoff: float = 1.0,
+        beta: float = 0.007,
+        d_cutoff: float = 1.0,
+    ) -> None:
+        self.min_cutoff = float(min_cutoff)
+        self.beta = float(beta)
+        self.d_cutoff = float(d_cutoff)
+
+        self.x_prev: Optional[np.ndarray] = None
+        self.dx_prev: Optional[np.ndarray] = None
+        self.t_prev: Optional[float] = None
+
+    @staticmethod
+    def _alpha(rate: float, cutoff: np.ndarray) -> np.ndarray:
+        tau = 1.0 / (2.0 * np.pi * np.maximum(cutoff, 1e-4))
+        te = 1.0 / max(rate, 1e-4)
+        return 1.0 / (1.0 + tau / te)
+
+    def update(self, x: np.ndarray, timestamp: Optional[float] = None) -> np.ndarray:
+        """
+        Filters input coordinate array.
+        x: ndarray of shape (21, 3) or (N,)
+        timestamp: monotonic seconds (optional, defaults to time.time())
+        """
+        now = time.time() if timestamp is None else float(timestamp)
+        x = np.asarray(x, dtype=np.float32)
+
+        if self.x_prev is None or self.t_prev is None or self.x_prev.shape != x.shape:
+            self.x_prev = x.copy()
+            self.dx_prev = np.zeros_like(x)
+            self.t_prev = now
+            return x.copy()
+
+        dt = now - self.t_prev
+        if dt < 1e-4:
+            dt = 1.0 / 30.0
+        elif dt > 0.5:
+            self.reset()
+            self.x_prev = x.copy()
+            self.dx_prev = np.zeros_like(x)
+            self.t_prev = now
+            return x.copy()
+
+        rate = 1.0 / dt
+
+        # Estimate derivative of input signal
+        dx = (x - self.x_prev) * rate
+        a_d = self._alpha(rate, np.full_like(x, self.d_cutoff))
+        dx_hat = a_d * dx + (1.0 - a_d) * self.dx_prev
+
+        # Adaptive cutoff based on velocity magnitude
+        speed = np.abs(dx_hat)
+        cutoff = self.min_cutoff + self.beta * speed
+        a = self._alpha(rate, cutoff)
+
+        # Filter the signal
+        x_hat = a * x + (1.0 - a) * self.x_prev
+
+        self.x_prev = x_hat.copy()
+        self.dx_prev = dx_hat.copy()
+        self.t_prev = now
+
+        return x_hat.copy()
+
+    def reset(self) -> None:
+        """Resets filter memory."""
+        self.x_prev = None
+        self.dx_prev = None
+        self.t_prev = None
+
+
 class ExponentialMovingAverage:
     """Smooths multi-dimensional coordinate arrays (e.g. landmarks) over time to remove jitter."""
 

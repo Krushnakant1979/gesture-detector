@@ -17,11 +17,75 @@ class LandmarkNormalizer:
         self.epsilon = epsilon
         self.heuristics: Dict[str, Any] = heuristics or {}
 
-    def normalize(self, landmarks_3d: np.ndarray) -> np.ndarray:
+    def canonical_align(
+        self,
+        landmarks_3d: np.ndarray,
+        handedness: str = "Right",
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Normalizes 21 3D landmark points to be invariant to translation and camera distance.
-        Centers wrist at (0, 0, 0) and scales by maximum Euclidean distance.
+        Transforms 21 3D landmarks into a canonical orientation-invariant coordinate frame.
+        - Wrist at (0, 0, 0)
+        - Middle MCP at (0, 1, 0) (longitudinal Y-axis)
+        - Palm normal along Z-axis
+        - Knuckles along X-axis (chirality-invariant between Left and Right hands)
+        Returns:
+            canonical_landmarks: Shape (21, 3) invariant to 3D rotation, pitch, roll, and yaw.
+            rotation_matrix: Shape (3, 3) orthogonal transformation matrix.
         """
+        if landmarks_3d.shape != (21, 3):
+            raise ValueError(f"Expected input array of shape (21, 3), got {landmarks_3d.shape}")
+
+        wrist = landmarks_3d[0]
+        centered = landmarks_3d - wrist
+
+        # Longitudinal axis (Wrist -> Middle MCP)
+        v_long = centered[9]
+        norm_long = float(np.linalg.norm(v_long))
+        if norm_long < self.epsilon:
+            norm_long = 1.0
+        u_y = v_long / norm_long
+
+        # Knuckle vector: adjusted for handedness so both hands map to identical canonical geometry
+        if handedness.lower() == "left":
+            v_knuck = centered[17] - centered[5]
+        else:
+            v_knuck = centered[5] - centered[17]
+
+        # Palm normal vector
+        v_z = np.cross(v_knuck, u_y)
+        norm_z = float(np.linalg.norm(v_z))
+        if norm_z < self.epsilon:
+            u_z = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+        else:
+            u_z = v_z / norm_z
+
+        # Transverse vector
+        u_x = np.cross(u_y, u_z)
+        norm_x = float(np.linalg.norm(u_x))
+        if norm_x > self.epsilon:
+            u_x = u_x / norm_x
+
+        # 3x3 Rotation matrix
+        R = np.vstack([u_x, u_y, u_z]).astype(np.float32)
+
+        # Scale reference (wrist to middle MCP)
+        scale = norm_long
+        canonical = (centered / scale) @ R.T
+        return canonical.astype(np.float32), R
+
+    def normalize(
+        self,
+        landmarks_3d: np.ndarray,
+        canonical: bool = False,
+        handedness: str = "Right",
+    ) -> np.ndarray:
+        """
+        Normalizes 21 3D landmark points to be invariant to translation, scale, and optionally 3D rotation.
+        """
+        if canonical:
+            c_lm, _ = self.canonical_align(landmarks_3d, handedness=handedness)
+            return c_lm.flatten().astype(np.float32)
+
         if landmarks_3d.shape != (21, 3):
             raise ValueError(f"Expected input array of shape (21, 3), got {landmarks_3d.shape}")
 
@@ -267,34 +331,35 @@ class LandmarkNormalizer:
         # ----------------------------------------------------------------
         # C SHAPE DETECTION: All 4 fingers curved in C formation
         # In C, fingers are arched in a curved C-cup (never flat upright open palm).
-        # Thumb curves opposite to form the lower jaw of C with open aperture (0.22 - 0.85).
+        # Thumb curves opposite to form the lower jaw of C with open aperture (0.20 - 0.95).
         # ----------------------------------------------------------------
         d_index_wrist_norm = float(np.linalg.norm(lm[8] - wrist) / ref_scale)
         d_ring_wrist_norm = float(np.linalg.norm(lm[16] - wrist) / ref_scale)
 
-        # Flat open hand (Image 1): all 4 fingers straight upright and spread
-        # Also catches cases where ANY two fingers point straight up widely apart
+        dx_idx = abs(lm[8][0] - lm[5][0])
+        dy_idx = abs(lm[8][1] - lm[5][1])
+        dx_mid = abs(lm[12][0] - lm[9][0])
+        dy_mid = abs(lm[12][1] - lm[9][1])
+
+        # Flat open hand (Image 1): all 4 fingers straight vertical to the ceiling (dy >> dx) and spread
         is_flat_open_hand = bool(
-            (up_index and up_middle and up_ring and up_pinky)
-            or (up_index and up_middle and up_ring and d_index_middle_tip > 0.28)
-            or (up_index and up_middle and d_index_middle_tip > 0.32 and d_middle_ring_tip > 0.28)
+            up_index and up_middle and up_ring and up_pinky
+            and dy_idx > 1.15 * dx_idx
+            and dy_mid > 1.15 * dx_mid
+            and (thumb_extended_out or d_thumb_index_mcp > 0.40 or d_index_middle_tip > 0.28)
         )
 
         is_C_shape = bool(
             not is_O_shape
             and not is_flat_open_hand
-            and not up_index                        # C fingers are NEVER fully upright — they curve forward
-            and not up_middle
-            and not up_ring
-            and not up_pinky
             and d_index_middle_tip < 0.38
-            and d_thumb_index_tip > 0.22
-            and d_thumb_index_tip < 0.85
-            and d_thumb_middle_tip < 0.88
-            and d_index_wrist_norm > 0.45
-            and d_ring_wrist_norm > 0.35
-            and (thumb_extended_out or d_thumb_index_mcp > 0.35)
-            and (horiz_index or horiz_middle or is_hand_horizontal or lm[8][2] < lm[5][2] - 0.10)
+            and d_thumb_index_tip > 0.20
+            and d_thumb_index_tip < 0.95
+            and d_thumb_middle_tip < 0.98
+            and d_index_wrist_norm > 0.38
+            and d_ring_wrist_norm > 0.28
+            and (thumb_extended_out or d_thumb_index_mcp > 0.32)
+            and (horiz_index or horiz_middle or is_hand_horizontal or dx_idx > 0.55 * dy_idx or lm[8][2] < lm[5][2] - 0.08)
         )
 
         # ----------------------------------------------------------------
@@ -394,7 +459,13 @@ class LandmarkNormalizer:
         is_pinky_tilted = bool(abs(v_pinky_vec[0]) > 0.35 * abs(v_pinky_vec[1]))
         is_hand_tilted = bool(abs(v_long[0]) > 0.35 * abs(v_long[1]))
 
+        # Canonical 3D alignment for rotation-invariant analysis
+        canonical_lm, R_canonical = self.canonical_align(lm, handedness=handedness)
+
         return {
+            # Canonical 3D representations
+            "landmarks_canonical": canonical_lm,
+            "canonical_rotation": R_canonical,
             # Finger extension flags
             "ext_index": ext_index,
             "ext_middle": ext_middle,
