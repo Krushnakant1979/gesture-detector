@@ -51,6 +51,7 @@ class LSTMRecurrentClassifier:
         self.min_confidence = min_confidence
 
         self.sequence_buffer: Deque[np.ndarray] = deque(maxlen=self.window_size)
+        self.tip_buffer: Deque[Dict[str, np.ndarray]] = deque(maxlen=self.window_size)
 
         # Initialize LSTM weights (W_gate: input_size -> hidden_size, U_gate: hidden_size -> hidden_size)
         self._init_weights()
@@ -74,24 +75,6 @@ class LSTMRecurrentClassifier:
         scale_out = np.sqrt(2.0 / (self.hidden_size + self.num_classes))
         self.W_y = np.random.randn(self.num_classes, self.hidden_size).astype(np.float32) * scale_out
         self.b_y = np.zeros((self.num_classes,), dtype=np.float32)
-
-        # Calibrate baseline dynamic signatures for J and Z
-        self._calibrate_builtin_dynamic_signatures()
-
-    def _calibrate_builtin_dynamic_signatures(self) -> None:
-        """
-        Embeds distinct temporal dynamic direction weights for J (pinky downward hook)
-        and Z (index zigzag stroke) into the classification head.
-        """
-        j_idx = self.classes.index("J") if "J" in self.classes else -1
-        z_idx = self.classes.index("Z") if "Z" in self.classes else -1
-
-        if j_idx >= 0:
-            # Sensitive to pinky tip (indices 60:63) vertical motion and horizontal hook
-            self.W_y[j_idx, : self.hidden_size // 2] = 0.5
-        if z_idx >= 0:
-            # Sensitive to index tip (indices 24:27) horizontal and diagonal stroke
-            self.W_y[z_idx, self.hidden_size // 2 :] = 0.5
 
     def step(
         self,
@@ -132,14 +115,149 @@ class LSTMRecurrentClassifier:
         probs = softmax(logits)
         return probs, h
 
-    def update(self, feature_vector: np.ndarray) -> Optional[Tuple[str, float]]:
+    def fit(
+        self,
+        X_seqs: List[np.ndarray],
+        y_labels: List[str],
+        epochs: int = 30,
+        lr: float = 0.005,
+        verbose: bool = True,
+    ) -> float:
+        """
+        Trains the LSTM weights using vectorized Backpropagation Through Time (BPTT) and Adam.
+        X_seqs: List of (T, 63) arrays
+        y_labels: List of label strings ('J', 'Z', 'STATIC')
+        """
+        K = self.num_classes
+        N = len(X_seqs)
+        H, D = self.hidden_size, self.input_size
+
+        y_onehot = np.zeros((N, K), dtype=np.float32)
+        for i, lbl in enumerate(y_labels):
+            idx = self.classes.index(lbl) if lbl in self.classes else 0
+            y_onehot[i, idx] = 1.0
+
+        mW, vW = np.zeros_like(self.W), np.zeros_like(self.W)
+        mU, vU = np.zeros_like(self.U), np.zeros_like(self.U)
+        mb, vb = np.zeros_like(self.b), np.zeros_like(self.b)
+        mWy, vWy = np.zeros_like(self.W_y), np.zeros_like(self.W_y)
+        mby, vby = np.zeros_like(self.b_y), np.zeros_like(self.b_y)
+        beta1, beta2, eps = 0.9, 0.999, 1e-8
+        step_cnt = 0
+
+        final_acc = 0.0
+        for ep in range(epochs):
+            indices = np.random.permutation(N)
+            total_loss = 0.0
+            correct = 0
+
+            for idx in indices:
+                step_cnt += 1
+                x_seq = X_seqs[idx].astype(np.float32)
+                y_target = y_onehot[idx]
+                T = len(x_seq)
+
+                hs = np.zeros((T + 1, H), dtype=np.float32)
+                cs = np.zeros((T + 1, H), dtype=np.float32)
+                fs = np.zeros((T, H), dtype=np.float32)
+                ins = np.zeros((T, H), dtype=np.float32)
+                c_tildes = np.zeros((T, H), dtype=np.float32)
+                os_gate = np.zeros((T, H), dtype=np.float32)
+                tanh_cs = np.zeros((T, H), dtype=np.float32)
+
+                for t in range(T):
+                    g = self.W @ x_seq[t] + self.U @ hs[t] + self.b
+                    f = sigmoid(g[0:H])
+                    i_gate = sigmoid(g[H : 2 * H])
+                    c_tilde = np.tanh(g[2 * H : 3 * H])
+                    o = sigmoid(g[3 * H : 4 * H])
+
+                    fs[t], ins[t], c_tildes[t], os_gate[t] = f, i_gate, c_tilde, o
+                    cs[t + 1] = f * cs[t] + i_gate * c_tilde
+                    tanh_cs[t] = np.tanh(cs[t + 1])
+                    hs[t + 1] = o * tanh_cs[t]
+
+                logits = self.W_y @ hs[T] + self.b_y
+                probs = softmax(logits)
+
+                loss = -np.sum(y_target * np.log(np.maximum(probs, 1e-12)))
+                total_loss += loss
+                if np.argmax(probs) == np.argmax(y_target):
+                    correct += 1
+
+                # Backward pass
+                dlogits = probs - y_target
+                dWy = np.outer(dlogits, hs[T])
+                dby = dlogits
+
+                dh = self.W_y.T @ dlogits
+                dW = np.zeros_like(self.W)
+                dU = np.zeros_like(self.U)
+                db = np.zeros_like(self.b)
+
+                dg_prev = np.zeros(4 * H, dtype=np.float32)
+                dc_next = np.zeros(H, dtype=np.float32)
+
+                for t in reversed(range(T)):
+                    if t < T - 1:
+                        dh = self.U.T @ dg_prev
+                        dc = dc_next * fs[t + 1]
+                    else:
+                        dc = np.zeros(H, dtype=np.float32)
+
+                    do = dh * tanh_cs[t]
+                    dg_o = do * os_gate[t] * (1.0 - os_gate[t])
+
+                    dc += dh * os_gate[t] * (1.0 - tanh_cs[t] ** 2)
+
+                    df = dc * cs[t]
+                    dg_f = df * fs[t] * (1.0 - fs[t])
+
+                    di = dc * c_tildes[t]
+                    dg_i = di * ins[t] * (1.0 - ins[t])
+
+                    dc_tilde = dc * ins[t]
+                    dg_c = dc_tilde * (1.0 - c_tildes[t] ** 2)
+
+                    dg = np.concatenate([dg_f, dg_i, dg_c, dg_o])
+                    dg_prev = dg
+                    dc_next = dc
+
+                    dW += np.outer(dg, x_seq[t])
+                    dU += np.outer(dg, hs[t])
+                    db += dg
+
+                # Adam parameter update
+                for p, dp, mp_v, vp_v in [
+                    (self.W, dW, mW, vW),
+                    (self.U, dU, mU, vU),
+                    (self.b, db, mb, vb),
+                    (self.W_y, dWy, mWy, vWy),
+                    (self.b_y, dby, mby, vby),
+                ]:
+                    mp_v[:] = beta1 * mp_v + (1.0 - beta1) * dp
+                    vp_v[:] = beta2 * vp_v + (1.0 - beta2) * (dp ** 2)
+                    m_hat = mp_v / (1.0 - beta1 ** step_cnt)
+                    v_hat = vp_v / (1.0 - beta2 ** step_cnt)
+                    p -= lr * m_hat / (np.sqrt(v_hat) + eps)
+
+            final_acc = correct / N
+            if verbose and ((ep + 1) % 5 == 0 or ep == epochs - 1):
+                logger.info("LSTMR Epoch %2d/%2d: Loss = %.4f, Accuracy = %.1f%%", ep + 1, epochs, total_loss / N, final_acc * 100)
+
+        return float(final_acc)
+
+    def update(
+        self,
+        feature_vector: np.ndarray,
+        raw_landmarks: Optional[np.ndarray] = None,
+    ) -> Optional[Tuple[str, float]]:
         """
         Adds current frame's features to sliding sequence buffer.
         Returns (dynamic_sign, confidence) if a dynamic gesture is detected with high confidence.
         """
         feat = np.asarray(feature_vector, dtype=np.float32).flatten()
         if len(feat) != self.input_size:
-            # Auto-pad or slice to match expected input size
             if len(feat) > self.input_size:
                 feat = feat[: self.input_size]
             else:
@@ -147,23 +265,57 @@ class LSTMRecurrentClassifier:
 
         self.sequence_buffer.append(feat)
 
+        # Track fingertip positions
+        if raw_landmarks is not None and len(raw_landmarks) == 21:
+            self.tip_buffer.append({
+                "wrist": raw_landmarks[0][:2].copy(),
+                "index": raw_landmarks[8][:2].copy(),
+                "pinky": raw_landmarks[20][:2].copy(),
+            })
+
         if len(self.sequence_buffer) < max(8, self.window_size // 2):
             return None
 
         seq_arr = np.array(self.sequence_buffer, dtype=np.float32)
+
+        # Kinetic displacement and path length validation
+        # Use tip buffer if available, else canonical coordinates
+        if len(self.tip_buffer) >= len(self.sequence_buffer):
+            idx_pts = np.array([tb["index"] for tb in self.tip_buffer])
+            pnk_pts = np.array([tb["pinky"] for tb in self.tip_buffer])
+        else:
+            # Fallback: landmarks 8 (24:27) and 20 (60:63)
+            idx_pts = seq_arr[:, 24:27]
+            pnk_pts = seq_arr[:, 60:63]
+
+        idx_path = float(np.sum(np.linalg.norm(np.diff(idx_pts, axis=0), axis=1)))
+        idx_disp = float(np.linalg.norm(idx_pts[-1] - idx_pts[0]))
+        pnk_path = float(np.sum(np.linalg.norm(np.diff(pnk_pts, axis=0), axis=1)))
+        pnk_disp = float(np.linalg.norm(pnk_pts[-1] - pnk_pts[0]))
+
         probs, _ = self.forward(seq_arr)
         best_idx = int(np.argmax(probs))
         conf = float(probs[best_idx])
         pred_label = self.classes[best_idx]
 
+        # Require genuine movement trajectories:
+        if pred_label == "J":
+            if pnk_path < 0.10 or pnk_disp < 0.04:
+                pred_label = "STATIC"
+        elif pred_label == "Z":
+            if idx_path < 0.15 or idx_disp < 0.04:
+                pred_label = "STATIC"
+
         if pred_label != "STATIC" and conf >= self.min_confidence:
+            self.reset()
             return pred_label, conf
 
         return None
 
     def reset(self) -> None:
-        """Clears sequence buffer."""
+        """Clears sequence buffers."""
         self.sequence_buffer.clear()
+        self.tip_buffer.clear()
 
     def save(self, filepath: str) -> None:
         """Saves LSTM weights and class names to an npz file."""

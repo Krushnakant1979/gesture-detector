@@ -10,6 +10,7 @@ Includes:
 
 from __future__ import annotations
 
+import bisect
 from collections import Counter, deque
 import logging
 import os
@@ -73,10 +74,10 @@ class GestureDebouncer:
             self.current_confidence = avg_conf
         else:
             # If current gesture is still dominant in the history buffer, maintain it
-            counts = Counter([label for label, _ in self.history if label != "None"])
-            if counts:
-                most_common, freq = counts.most_common(1)[0]
-                if most_common == self.current_gesture and freq >= req_frames:
+            cur = self.current_gesture
+            if cur != "None":
+                freq = sum(1 for label, _ in self.history if label == cur)
+                if freq >= req_frames:
                     pass  # Keep current gesture steady
 
         return self.current_gesture, self.current_confidence
@@ -158,11 +159,11 @@ class OneEuroFilter:
         # Filter the signal
         x_hat = a * x + (1.0 - a) * self.x_prev
 
-        self.x_prev = x_hat.copy()
-        self.dx_prev = dx_hat.copy()
+        self.x_prev[:] = x_hat
+        self.dx_prev[:] = dx_hat
         self.t_prev = now
 
-        return x_hat.copy()
+        return x_hat
 
     def reset(self) -> None:
         """Resets filter memory."""
@@ -249,7 +250,13 @@ class StrokeTrajectoryTracker:
                 return "Z", 0.98
 
         # Check J stroke if pinky is extended and other fingers are curled
-        if metrics and metrics.get("ext_pinky") and not metrics.get("ext_index"):
+        if (
+            metrics
+            and metrics.get("ext_pinky")
+            and not metrics.get("ext_index")
+            and not metrics.get("horiz_index")
+            and not metrics.get("is_G_shape")
+        ):
             if self._detect_j_stroke():
                 self.active_stroke = "J"
                 self.active_stroke_hold = self.hold_frames
@@ -310,8 +317,8 @@ class StrokeTrajectoryTracker:
         dx_hook = p_hook[-1][0] - p_hook[0][0] # Sweeping left (-X) or curve
         dy_hook = p_hook[-1][1] - p_hook[0][1] # Hooking back up (-Y)
 
-        cond_down = dy_down > 0.04
-        cond_hook = (dx_hook < -0.02) or (dy_hook < -0.02)
+        cond_down = dy_down > 0.035
+        cond_hook = (abs(dx_hook) > 0.02) or (dy_hook < -0.02)
 
         return bool(cond_down and cond_hook)
 
@@ -352,12 +359,21 @@ class WordPredictor:
         self.words: List[str] = sorted(vocab)
 
     def predict(self, prefix: str, max_results: int = 3) -> List[str]:
-        """Returns top matching full words starting with prefix."""
+        """Returns top matching full words starting with prefix using binary search."""
         pref = prefix.strip().upper()
         if not pref:
             return []
-        matches = [w for w in self.words if w.startswith(pref) and w != pref]
-        return matches[:max_results]
+        idx = bisect.bisect_left(self.words, pref)
+        matches: List[str] = []
+        for i in range(idx, len(self.words)):
+            w = self.words[i]
+            if not w.startswith(pref):
+                break
+            if w != pref:
+                matches.append(w)
+                if len(matches) >= max_results:
+                    break
+        return matches
 
 
 class TextToSpeech:

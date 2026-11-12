@@ -1,7 +1,7 @@
 """
-Visualizer Module for ASL Alphabet Recognition
+Visualizer Module for ASL Alphabet Recognition Studio
 Renders high-fps, modern HUD graphics, illuminated ASL letter badges, finger state monitors,
-word auto-completion suggestions, and interactive text spelling displays using OpenCV.
+gesture hold progress rings, interactive word editing buttons, and real-time TTS status indicators.
 """
 
 from __future__ import annotations
@@ -34,6 +34,8 @@ HAND_CONNECTIONS: List[Tuple[int, int]] = [
 class ModernVisualizer:
     """Renders semi-transparent HUD elements, illuminated ASL character badges, and word speller."""
 
+    FINGER_TIPS = {4, 8, 12, 16, 20}
+
     def __init__(
         self,
         theme_color: Tuple[int, int, int] = (0, 230, 118),     # Vibrant Green (BGR)
@@ -52,6 +54,9 @@ class ModernVisualizer:
         self.prev_time = time.time()
         self.smoothed_fps = 30.0
 
+        # UI interactive button coordinates cache
+        self.button_boxes: Dict[str, Tuple[int, int, int, int]] = {}
+
     def update_fps(self) -> float:
         """Calculates smoothed frame rate."""
         now = time.time()
@@ -62,21 +67,70 @@ class ModernVisualizer:
             self.smoothed_fps = 0.9 * self.smoothed_fps + 0.1 * current_fps
         return self.smoothed_fps
 
+    @staticmethod
+    def _segments_intersect(p1: np.ndarray, p2: np.ndarray, p3: np.ndarray, p4: np.ndarray) -> bool:
+        """Determines if segment (p1, p2) and segment (p3, p4) strictly intersect in 2D."""
+        def ccw(A: np.ndarray, B: np.ndarray, C: np.ndarray) -> bool:
+            return (C[1] - A[1]) * (B[0] - A[0]) > (B[1] - A[1]) * (C[0] - A[0])
+        return ccw(p1, p3, p4) != ccw(p2, p3, p4) and ccw(p1, p2, p3) != ccw(p1, p2, p4)
+
     def draw_skeleton(self, frame: np.ndarray, landmarks_px: np.ndarray) -> None:
-        """Draws bone connections and joint circles."""
+        """
+        Draws bone connections and joint circles with topological sanity checking.
+        Suppresses spurious cross-palm connection lines that slice through fingers
+        when MediaPipe landmark regression collapses during forward drapes (e.g. M and N).
+        """
+        digit_bones = [
+            (1, 2), (2, 3), (3, 4),
+            (5, 6), (6, 7), (7, 8),
+            (9, 10), (10, 11), (11, 12),
+            (13, 14), (14, 15), (15, 16),
+            (17, 18), (18, 19), (19, 20),
+        ]
+        pts = landmarks_px.astype(np.float32)
+
         for p1_idx, p2_idx in HAND_CONNECTIONS:
-            pt1 = tuple(landmarks_px[p1_idx])
-            pt2 = tuple(landmarks_px[p2_idx])
+            if p1_idx == 0 or p2_idx == 0:
+                seg_a, seg_b = pts[p1_idx], pts[p2_idx]
+                crosses_digit = False
+                for f1, f2 in digit_bones:
+                    if len({p1_idx, p2_idx, f1, f2}) < 4:
+                        continue
+                    if self._segments_intersect(seg_a, seg_b, pts[f1], pts[f2]):
+                        crosses_digit = True
+                        break
+                if crosses_digit:
+                    continue
+
+            pt1 = (int(landmarks_px[p1_idx][0]), int(landmarks_px[p1_idx][1]))
+            pt2 = (int(landmarks_px[p2_idx][0]), int(landmarks_px[p2_idx][1]))
             cv2.line(frame, pt1, pt2, (220, 220, 220), 2, cv2.LINE_AA)
 
-        tips = {4, 8, 12, 16, 20}
         for idx, pt in enumerate(landmarks_px):
-            coord = tuple(pt)
-            if idx in tips:
+            coord = (int(pt[0]), int(pt[1]))
+            if idx in self.FINGER_TIPS:
                 cv2.circle(frame, coord, 7, self.secondary_color, -1, cv2.LINE_AA)
                 cv2.circle(frame, coord, 9, (255, 255, 255), 1, cv2.LINE_AA)
             else:
                 cv2.circle(frame, coord, 4, self.theme_color, -1, cv2.LINE_AA)
+
+    @staticmethod
+    def draw_alpha_rect(
+        frame: np.ndarray,
+        bbox: Tuple[int, int, int, int],
+        color: Tuple[int, int, int],
+        alpha: float,
+    ) -> None:
+        """Draws a semi-transparent filled rectangle using zero-copy local ROI slicing."""
+        x, y, w, h = bbox
+        h_img, w_img = frame.shape[:2]
+        x1, y1 = max(0, x), max(0, y)
+        x2, y2 = min(w_img, x + w), min(h_img, y + h)
+        if x2 <= x1 or y2 <= y1:
+            return
+        sub = frame[y1:y2, x1:x2]
+        overlay = np.full(sub.shape, color, dtype=np.uint8)
+        cv2.addWeighted(overlay, alpha, sub, 1.0 - alpha, 0, sub)
 
     def draw_corner_rect(
         self,
@@ -97,6 +151,13 @@ class ModernVisualizer:
         cv2.line(frame, (x + w, y + h), (x + w - length, y + h), color, thickness, cv2.LINE_AA)
         cv2.line(frame, (x + w, y + h), (x + w, y + h - length), color, thickness, cv2.LINE_AA)
 
+    def get_button_at_pos(self, px: int, py: int) -> Optional[str]:
+        """Returns button name if mouse coordinates (px, py) fall inside a button."""
+        for name, (bx, by, bw, bh) in self.button_boxes.items():
+            if bx <= px <= bx + bw and by <= py <= by + bh:
+                return name
+        return None
+
     def render(
         self,
         frame: np.ndarray,
@@ -106,12 +167,19 @@ class ModernVisualizer:
         spelled_text: str = "",
         debug_info: Optional[Dict[str, any]] = None,
         suggestions: Optional[List[str]] = None,
+        system_state: str = "WAITING",
+        current_word: str = "",
+        letter_sequence: Optional[List[str]] = None,
+        hold_progress: float = 0.0,
+        last_spoken_word: str = "",
+        tts_status: str = "IDLE",
+        active_control: str = "NONE",
     ) -> np.ndarray:
-        """Renders the comprehensive ASL Alphabet HUD with auto-complete suggestions."""
+        """Renders the comprehensive ASL Alphabet and Word Formation HUD."""
         fps = self.update_fps()
         h, w, _ = frame.shape
 
-        # 1. Hand Skeleton & Brackets
+        # 1. Hand Skeleton & Bounding Brackets
         for hand in hands:
             if self.draw_landmarks:
                 self.draw_skeleton(frame, hand.landmarks_pixel)
@@ -132,47 +200,62 @@ class ModernVisualizer:
                 )
 
         # 2. Top Header HUD Bar
-        overlay = frame.copy()
-        cv2.rectangle(overlay, (0, 0), (w, 54), (16, 16, 16), -1)
-        cv2.addWeighted(overlay, 0.70, frame, 0.30, 0, frame)
-
+        self.draw_alpha_rect(frame, (0, 0, w, 54), (16, 16, 16), 0.75)
         fps_color = (0, 255, 128) if fps >= 24 else ((0, 215, 255) if fps >= 15 else (0, 0, 255))
         cv2.putText(frame, f"FPS: {fps:.1f}", (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.7, fps_color, 2, cv2.LINE_AA)
         cv2.putText(frame, "ASL Fingerspelling Studio", (170, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2, cv2.LINE_AA)
 
-        controls_tip = "[Space]: Add  |  [Tab]: Auto-Complete  |  [C]: Clear  |  [Q]: Quit"
-        cv2.putText(frame, controls_tip, (w - 530, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (180, 180, 180), 1, cv2.LINE_AA)
+        controls_tip = "[Hold Sign]: Add  |  [👍 Thumbs-Up]: Speak Word  |  [Del/Backspace]  |  [C]: Clear"
+        cv2.putText(frame, controls_tip, (max(500, w - 660), 34), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (180, 180, 180), 1, cv2.LINE_AA)
 
-        # 3. Prominent ASL Alphabet Badge (Top-Left under Header)
-        is_active = active_letter not in ("None", "-", "Unknown")
-        badge_w, badge_h = 210, 125
+        # 3. Prominent ASL Alphabet / Control Badge (Top-Left)
+        badge_w, badge_h = 240, 130
         badge_x, badge_y = 20, 70
-
-        badge_overlay = frame.copy()
-        cv2.rectangle(badge_overlay, (badge_x, badge_y), (badge_x + badge_w, badge_y + badge_h), (20, 20, 20), -1)
-        cv2.addWeighted(badge_overlay, 0.80, frame, 0.20, 0, frame)
+        self.draw_alpha_rect(frame, (badge_x, badge_y, badge_w, badge_h), (20, 20, 20), 0.82)
         cv2.rectangle(frame, (badge_x, badge_y), (badge_x + badge_w, badge_y + badge_h), (60, 60, 60), 1)
 
-        cv2.putText(frame, "DETECTED LETTER", (badge_x + 18, badge_y + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (170, 170, 170), 1, cv2.LINE_AA)
+        is_tu = (active_control == "THUMBS_UP")
+        is_active = bool(
+            not is_tu
+            and active_letter not in ("None", "-", "Unknown", "Unknown Hand Gesture", "")
+            and confidence >= 0.92
+        )
 
-        disp_char = active_letter if is_active else "-"
-        char_color = self.theme_color if is_active else (100, 100, 100)
-        cv2.putText(frame, disp_char, (badge_x + 80, badge_y + 82), cv2.FONT_HERSHEY_DUPLEX, 1.8, char_color, 3, cv2.LINE_AA)
+        if is_tu:
+            cv2.putText(frame, "CONTROL GESTURE", (badge_x + 18, badge_y + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 200), 1, cv2.LINE_AA)
+            cv2.putText(frame, "CONFIRM", (badge_x + 35, badge_y + 75), cv2.FONT_HERSHEY_DUPLEX, 1.1, (0, 255, 128), 2, cv2.LINE_AA)
+            cv2.putText(frame, "(Thumbs-Up)", (badge_x + 55, badge_y + 98), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (200, 255, 200), 1, cv2.LINE_AA)
+        elif is_active:
+            cv2.putText(frame, "DETECTED LETTER", (badge_x + 18, badge_y + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (170, 170, 170), 1, cv2.LINE_AA)
+            cv2.putText(frame, active_letter, (badge_x + 95, badge_y + 82), cv2.FONT_HERSHEY_DUPLEX, 1.8, self.theme_color, 3, cv2.LINE_AA)
+            # Accuracy Percentage
+            cv2.putText(frame, f"{int(confidence * 100)}%", (badge_x + badge_w - 52, badge_y + 80), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1, cv2.LINE_AA)
+        elif len(hands) > 0:
+            cv2.putText(frame, "DETECTED LETTER", (badge_x + 18, badge_y + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (170, 170, 170), 1, cv2.LINE_AA)
+            warn_color = (0, 165, 255)
+            cv2.putText(frame, "Unknown Hand", (badge_x + 18, badge_y + 60), cv2.FONT_HERSHEY_DUPLEX, 0.65, warn_color, 2, cv2.LINE_AA)
+            cv2.putText(frame, "Gesture", (badge_x + 18, badge_y + 85), cv2.FONT_HERSHEY_DUPLEX, 0.65, warn_color, 2, cv2.LINE_AA)
+            sub_text = f"Accuracy: {int(confidence * 100)}% (< 92%)" if confidence > 0 else "Accuracy < 92%"
+            cv2.putText(frame, sub_text, (badge_x + 18, badge_y + 112), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (170, 170, 170), 1, cv2.LINE_AA)
+        else:
+            cv2.putText(frame, "DETECTED LETTER", (badge_x + 18, badge_y + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (170, 170, 170), 1, cv2.LINE_AA)
+            cv2.putText(frame, "-", (badge_x + 105, badge_y + 82), cv2.FONT_HERSHEY_DUPLEX, 1.8, (100, 100, 100), 3, cv2.LINE_AA)
+            cv2.putText(frame, "No Hand Detected", (badge_x + 45, badge_y + 112), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (130, 130, 130), 1, cv2.LINE_AA)
 
         # Confidence Bar in Badge
         bar_x = badge_x + 18
-        bar_y = badge_y + 102
+        bar_y = badge_y + 112
         bar_w = badge_w - 36
-        bar_h = 8
-        cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h), (45, 45, 45), -1)
-        if is_active:
+        bar_h = 7
+        if is_active or is_tu:
+            cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h), (45, 45, 45), -1)
             fill_w = int(bar_w * np.clip(confidence, 0.0, 1.0))
-            cv2.rectangle(frame, (bar_x, bar_y), (bar_x + fill_w, bar_y + bar_h), self.theme_color, -1)
-            cv2.putText(frame, f"{int(confidence * 100)}%", (badge_x + badge_w - 48, badge_y + 80), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1, cv2.LINE_AA)
+            col = (0, 255, 128) if is_tu else self.theme_color
+            cv2.rectangle(frame, (bar_x, bar_y), (bar_x + fill_w, bar_y + bar_h), col, -1)
 
         # 4. Finger State Status Indicators (Below Badge)
         if debug_info:
-            status_y = badge_y + badge_h + 15
+            status_y = badge_y + badge_h + 12
             finger_names = [
                 ("T", debug_info.get("thumb_extended_out", False) or debug_info.get("is_thumb_pointing_up", False)),
                 ("I", debug_info.get("ext_index", False)),
@@ -180,7 +263,6 @@ class ModernVisualizer:
                 ("R", debug_info.get("ext_ring", False)),
                 ("P", debug_info.get("ext_pinky", False)),
             ]
-
             cv2.putText(frame, "Fingers:", (badge_x, status_y + 14), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (180, 180, 180), 1, cv2.LINE_AA)
             for i, (fn, state) in enumerate(finger_names):
                 f_box_x = badge_x + 65 + i * 28
@@ -189,30 +271,108 @@ class ModernVisualizer:
                 text_col = (0, 0, 0) if state else (160, 160, 160)
                 cv2.putText(frame, fn, (f_box_x + 6, status_y + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.45, text_col, 1, cv2.LINE_AA)
 
-        # 5. Suggestions Strip (Directly above Bottom Bar)
-        bar_bottom_h = 65
+        # 5. System State & Gesture Hold Progress Banner (Top-Right under Header)
+        state_w, state_h = 300, 85
+        state_x = w - state_w - 20
+        state_y = 70
+        self.draw_alpha_rect(frame, (state_x, state_y, state_w, state_h), (22, 22, 22), 0.85)
+        cv2.rectangle(frame, (state_x, state_y), (state_x + state_w, state_y + state_h), (60, 60, 60), 1)
+
+        cv2.putText(frame, "SYSTEM STATUS", (state_x + 16, state_y + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (170, 170, 170), 1, cv2.LINE_AA)
+
+        state_color_map = {
+            "WAITING": ((130, 130, 130), "WAITING FOR GESTURE"),
+            "COLLECTING": ((255, 200, 0), f"HOLDING SIGN '{active_letter}'"),
+            "CONFIRMING": ((0, 230, 118), "CONFIRMING (THUMBS-UP)"),
+            "COOLDOWN": ((0, 165, 255), "EVENT COMMITTED"),
+            "SPEAKING": ((220, 100, 255), f"SPEAKING: '{last_spoken_word}'"),
+        }
+        st_color, st_label = state_color_map.get(system_state, ((150, 150, 150), system_state))
+
+        # Status Pill indicator
+        cv2.circle(frame, (state_x + 24, state_y + 44), 6, st_color, -1, cv2.LINE_AA)
+        cv2.putText(frame, st_label, (state_x + 38, state_y + 48), cv2.FONT_HERSHEY_DUPLEX, 0.48, st_color, 1, cv2.LINE_AA)
+
+        # Hold Progress Bar
+        prog_bar_x = state_x + 16
+        prog_bar_y = state_y + 63
+        prog_bar_w = state_w - 32
+        prog_bar_h = 9
+        cv2.rectangle(frame, (prog_bar_x, prog_bar_y), (prog_bar_x + prog_bar_w, prog_bar_y + prog_bar_h), (40, 40, 40), -1)
+
+        if hold_progress > 0.0:
+            fill_prog = int(prog_bar_w * np.clip(hold_progress, 0.0, 1.0))
+            prog_col = (0, 230, 118) if system_state == "CONFIRMING" else (255, 190, 0)
+            cv2.rectangle(frame, (prog_bar_x, prog_bar_y), (prog_bar_x + fill_prog, prog_bar_y + prog_bar_h), prog_col, -1)
+            cv2.putText(frame, f"{int(hold_progress * 100)}%", (state_x + state_w - 45, state_y + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.40, prog_col, 1, cv2.LINE_AA)
+
+        # 6. Suggestions Strip (if enabled)
+        bar_bottom_h = 75
         bar_bottom_y = h - bar_bottom_h - 15
         bar_bottom_x = 20
         bar_bottom_w = w - 40
 
         if suggestions:
             sug_y = bar_bottom_y - 28
-            s_overlay = frame.copy()
-            cv2.rectangle(s_overlay, (bar_bottom_x, sug_y), (bar_bottom_x + bar_bottom_w, sug_y + 24), (24, 24, 24), -1)
-            cv2.addWeighted(s_overlay, 0.80, frame, 0.20, 0, frame)
+            self.draw_alpha_rect(frame, (bar_bottom_x, sug_y, bar_bottom_w, 24), (24, 24, 24), 0.80)
             sug_text = "Suggestions [TAB to complete]: " + "   |   ".join(suggestions)
             cv2.putText(frame, sug_text, (bar_bottom_x + 12, sug_y + 17), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 220, 255), 1, cv2.LINE_AA)
 
-        # 6. Bottom Spelled Word / Sentence Bar
-        b_overlay = frame.copy()
-        cv2.rectangle(b_overlay, (bar_bottom_x, bar_bottom_y), (bar_bottom_x + bar_bottom_w, bar_bottom_y + bar_bottom_h), (18, 18, 18), -1)
-        cv2.addWeighted(b_overlay, 0.85, frame, 0.15, 0, frame)
+        # 7. Interactive Control Action Buttons (Above bottom bar)
+        btn_y = bar_bottom_y - 36 if not suggestions else sug_y - 36
+        btn_h = 28
+        btn_spacing = 10
+
+        buttons = [
+            ("DELETE", "[ DEL ]", (0, 140, 255), 90),
+            ("CLEAR", "[ CLEAR ]", (50, 50, 220), 95),
+            ("REPEAT", "[ REPEAT ]", (200, 100, 255), 105),
+            ("CONFIRM", "[ CONFIRM 👍 ]", (0, 200, 100), 140),
+        ]
+
+        total_btn_w = sum(b[3] for b in buttons) + btn_spacing * (len(buttons) - 1)
+        start_btn_x = w - total_btn_w - 25
+
+        self.button_boxes.clear()
+        curr_x = start_btn_x
+        for b_id, b_text, b_col, b_w in buttons:
+            self.button_boxes[b_id] = (curr_x, btn_y, b_w, btn_h)
+            self.draw_alpha_rect(frame, (curr_x, btn_y, b_w, btn_h), (25, 25, 25), 0.85)
+            cv2.rectangle(frame, (curr_x, btn_y), (curr_x + b_w, btn_y + btn_h), b_col, 1)
+            cv2.putText(frame, b_text, (curr_x + 10, btn_y + 19), cv2.FONT_HERSHEY_SIMPLEX, 0.42, b_col, 1, cv2.LINE_AA)
+            curr_x += b_w + btn_spacing
+
+        # Last Spoken Status Tag (left of buttons)
+        if last_spoken_word:
+            tts_tag = f"SPOKEN: \"{last_spoken_word}\" ({tts_status})"
+            self.draw_alpha_rect(frame, (bar_bottom_x, btn_y, 350, btn_h), (20, 20, 20), 0.80)
+            cv2.putText(frame, tts_tag, (bar_bottom_x + 10, btn_y + 19), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (200, 255, 100), 1, cv2.LINE_AA)
+
+        # 8. Bottom Word Sequence & Formed Word Display Bar
+        self.draw_alpha_rect(frame, (bar_bottom_x, bar_bottom_y, bar_bottom_w, bar_bottom_h), (18, 18, 18), 0.88)
         cv2.rectangle(frame, (bar_bottom_x, bar_bottom_y), (bar_bottom_x + bar_bottom_w, bar_bottom_y + bar_bottom_h), (55, 55, 55), 1)
 
-        cv2.putText(frame, "SPELLED TEXT:", (bar_bottom_x + 18, bar_bottom_y + 39), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (160, 160, 160), 2, cv2.LINE_AA)
+        display_word = current_word if current_word else ""
 
-        display_spelled = spelled_text if spelled_text else "Show an ASL sign & press SPACE to append..."
-        spelled_color = (255, 255, 255) if spelled_text else (110, 110, 110)
-        cv2.putText(frame, display_spelled, (bar_bottom_x + 195, bar_bottom_y + 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, spelled_color, 2, cv2.LINE_AA)
+        if display_word:
+            # Formed word actively being constructed
+            cv2.putText(frame, "CURRENT WORD:", (bar_bottom_x + 18, bar_bottom_y + 32), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (170, 170, 170), 1, cv2.LINE_AA)
+            cv2.putText(frame, display_word, (bar_bottom_x + 155, bar_bottom_y + 36), cv2.FONT_HERSHEY_DUPLEX, 1.1, (0, 255, 200), 2, cv2.LINE_AA)
+
+            # Sequence details (e.g. K -> A -> J -> A -> L)
+            if letter_sequence and len(letter_sequence) > 1:
+                seq_text = "Sequence: " + " -> ".join(letter_sequence)
+                cv2.putText(frame, seq_text, (bar_bottom_x + 18, bar_bottom_y + 60), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (150, 220, 255), 1, cv2.LINE_AA)
+            elif spelled_text:
+                cv2.putText(frame, f"Sentence History: {spelled_text}", (bar_bottom_x + 18, bar_bottom_y + 60), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (160, 160, 160), 1, cv2.LINE_AA)
+        elif spelled_text:
+            # Word buffer is empty, show previously confirmed words
+            cv2.putText(frame, "LAST CONFIRMED:", (bar_bottom_x + 18, bar_bottom_y + 32), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (170, 170, 170), 1, cv2.LINE_AA)
+            cv2.putText(frame, spelled_text, (bar_bottom_x + 175, bar_bottom_y + 36), cv2.FONT_HERSHEY_DUPLEX, 1.0, (100, 220, 255), 2, cv2.LINE_AA)
+            cv2.putText(frame, "Hold an ASL sign to start new word  |  Click [CLEAR] to reset", (bar_bottom_x + 18, bar_bottom_y + 60), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (140, 140, 140), 1, cv2.LINE_AA)
+        else:
+            cv2.putText(frame, "CURRENT WORD:", (bar_bottom_x + 18, bar_bottom_y + 32), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (140, 140, 140), 1, cv2.LINE_AA)
+            cv2.putText(frame, "Hold an ASL sign to add letters  |  Show 👍 to confirm & speak", (bar_bottom_x + 155, bar_bottom_y + 34), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (110, 110, 110), 1, cv2.LINE_AA)
+            cv2.putText(frame, "Supports repeated letters (e.g. HELLO, BOOK, APPLE) via neutral transitions", (bar_bottom_x + 18, bar_bottom_y + 60), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (130, 130, 130), 1, cv2.LINE_AA)
 
         return frame

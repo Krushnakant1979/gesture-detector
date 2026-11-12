@@ -15,3 +15,8 @@ ENV/
 *.swp
 *.swo
 
+# Backups and temporary files
+*_backup.*
+*.bak
+scratch/
+

@@ -1,8 +1,9 @@
 """
-Main Application Entry Point for Real-Time ASL Fingerspelling Recognition.
+Main Application Entry Point for Real-Time ASL Fingerspelling Studio.
 Orchestrates high-fps camera capture with auto-reconnect, MediaPipe video tracking,
 landmark smoothing, dynamic stroke recognition (J/Z), hybrid classification,
-debouncing, HUD rendering, auto-complete, and non-blocking Text-To-Speech.
+debouncing, Gesture Event Management, Word Formation, Thumbs-Up Confirmation,
+HUD rendering, auto-complete, and non-blocking Text-To-Speech (TTS).
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import os
 import sys
 from typing import Any, Dict, List
 import cv2
+import numpy as np
 import yaml
 
 from src.capture import ThreadedCamera
@@ -24,9 +26,13 @@ from src.filters import (
     TextToSpeech,
     WordPredictor,
 )
+from src.gesture_commands import ControlGestureRecognizer, ControlGestureType
+from src.gesture_event_manager import EventType, GestureEventManager, SystemState
 from src.normalizer import LandmarkNormalizer
 from src.tracker import HandTracker
+from src.tts_engine import SpeechManager
 from src.visualizer import ModernVisualizer
+from src.word_builder import WordBuilder
 
 
 def setup_logger() -> logging.Logger:
@@ -66,13 +72,22 @@ def load_config(config_path: str = "config/config.yaml") -> Dict[str, Any]:
         },
         "classifier": {
             "mode": "hybrid",
-            "model_path": "models/gesture_classifier.pkl",
-            "min_confidence": 0.70,
-            "ml_fallback_min_confidence": 0.75,
+            "model_path": "models/lightgbm_classifier.pkl",
+            "min_confidence": 0.92,
+            "ml_fallback_min_confidence": 0.92,
         },
         "speller": {
             "enable_tts": True,
             "enable_autocomplete": True,
+        },
+        "word_builder": {
+            "hold_frames": 10,
+            "confirm_hold_frames": 8,
+            "cooldown_frames": 6,
+            "neutral_frames": 3,
+            "min_confidence": 0.92,
+            "enable_tts": True,
+            "voice_rate": 150,
         },
         "heuristics": {},
     }
@@ -90,7 +105,7 @@ def load_config(config_path: str = "config/config.yaml") -> Dict[str, Any]:
 
 def main() -> None:
     logger = setup_logger()
-    logger.info("Initializing Real-Time ASL Alphabet Fingerspelling Studio...")
+    logger.info("Initializing Real-Time ASL Alphabet Fingerspelling Studio with TTS & Word Formation...")
 
     config = load_config()
 
@@ -118,7 +133,7 @@ def main() -> None:
         clahe_clip_limit=track_cfg.get("clahe_clip_limit", 2.0),
     )
 
-    # 3. Filters, Smoothers & Trajectory Recognizers (1€ Adaptive Filter or EMA)
+    # 3. Filters, Smoothers & Trajectory Recognizers
     filter_cfg = config.get("filter", {})
     enable_smoothing = filter_cfg.get("enable_smoothing", True)
     filter_type = filter_cfg.get("type", "one_euro").lower()
@@ -133,14 +148,14 @@ def main() -> None:
 
     stroke_tracker = StrokeTrajectoryTracker() if filter_cfg.get("enable_trajectory", True) else None
 
-    # 4. Initialize ASL Classifier & Normalizer with Config Heuristics & Models (LightGBM/RF & LSTMR)
+    # 4. Initialize ASL Classifier & Normalizer
     heuristics_cfg = config.get("heuristics", {})
     cls_cfg = config.get("classifier", {})
     classifier = GestureClassifier(
         mode=cls_cfg.get("mode", "hybrid"),
         model_path=cls_cfg.get("model_path", "models/lightgbm_classifier.pkl"),
-        min_confidence=cls_cfg.get("min_confidence", 0.70),
-        ml_fallback_min_confidence=cls_cfg.get("ml_fallback_min_confidence", 0.75),
+        min_confidence=cls_cfg.get("min_confidence", 0.92),
+        ml_fallback_min_confidence=cls_cfg.get("ml_fallback_min_confidence", 0.92),
         heuristics=heuristics_cfg,
         enable_lstm=cls_cfg.get("enable_lstm", True),
         lstm_model_path=cls_cfg.get("lstm_model_path", "models/lstm_gesture_model.npz"),
@@ -150,7 +165,7 @@ def main() -> None:
     # 5. Debouncer & Visualizer
     deb_cfg = config.get("debouncer", {})
     debouncer = GestureDebouncer(
-        consecutive_frames=deb_cfg.get("consecutive_frames", 4),
+        consecutive_frames=deb_cfg.get("consecutive_frames", 3),
         history_length=deb_cfg.get("history_length", 8),
     )
 
@@ -162,13 +177,58 @@ def main() -> None:
     )
     mirror_mode = vis_cfg.get("mirror", True)
 
-    # 6. Speller, Auto-complete & Text-To-Speech
+    # 6. Word Builder & Gesture Event Manager
+    wb_cfg = config.get("word_builder", {})
+    word_builder = WordBuilder()
+    event_manager = GestureEventManager(
+        hold_frames=wb_cfg.get("hold_frames", 10),
+        confirm_hold_frames=wb_cfg.get("confirm_hold_frames", 8),
+        cooldown_frames=wb_cfg.get("cooldown_frames", 6),
+        neutral_frames_required=wb_cfg.get("neutral_frames", 3),
+        min_confidence=wb_cfg.get("min_confidence", 0.92),
+    )
+
+    # 7. Auto-complete & Text-To-Speech Speech Manager
     speller_cfg = config.get("speller", {})
     word_predictor = WordPredictor() if speller_cfg.get("enable_autocomplete", True) else None
-    tts = TextToSpeech(enabled=speller_cfg.get("enable_tts", True))
+    enable_tts = wb_cfg.get("enable_tts", True) or speller_cfg.get("enable_tts", True)
+    speech_manager = SpeechManager(enabled=enable_tts, voice_rate=wb_cfg.get("voice_rate", 150))
 
     window_name = "ASL Alphabet Recognition Studio"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+
+    spelled_text = ""
+
+    # Interactive UI mouse click handler for on-screen buttons
+    def on_mouse_click(event: int, x: int, y: int, flags: int, param: Any) -> None:
+        nonlocal spelled_text
+        if event == cv2.EVENT_LBUTTONDOWN:
+            btn = visualizer.get_button_at_pos(x, y)
+            if btn == "DELETE":
+                deleted = word_builder.delete_last()
+                if deleted:
+                    logger.info("Button [DEL] clicked -> Deleted '%s', Word: '%s'", deleted, word_builder.current_word)
+                elif spelled_text:
+                    spelled_text = spelled_text[:-1].rstrip()
+                    logger.info("Button [DEL] clicked -> Backspaced spelled text to '%s'", spelled_text)
+            elif btn == "CLEAR":
+                cleared = word_builder.clear()
+                spelled_text = ""
+                logger.info("Button [CLEAR] clicked -> Cleared word '%s' and reset display", cleared)
+            elif btn == "REPEAT":
+                logger.info("Button [REPEAT] clicked -> Speaking last confirmed word '%s'", speech_manager.last_spoken_word)
+                speech_manager.repeat_last()
+            elif btn == "CONFIRM":
+                confirmed = word_builder.confirm()
+                if confirmed:
+                    logger.info("Button [CONFIRM] clicked -> Confirmed '%s'! Speaking aloud...", confirmed)
+                    speech_manager.speak(confirmed)
+                    if spelled_text:
+                        spelled_text += " " + confirmed
+                    else:
+                        spelled_text = confirmed
+
+    cv2.setMouseCallback(window_name, on_mouse_click)
 
     try:
         camera.start()
@@ -177,10 +237,9 @@ def main() -> None:
         logger.info("Check if another application is using the webcam, or adjust camera device_id in config.yaml.")
         return
 
-    logger.info("ASL Studio running. Show ASL signs (A-Z) in front of the camera.")
-    logger.info("Controls: [SPACE] Add Letter | [TAB] Auto-Complete | [R] Record Sample | [C] Clear | [BACKSPACE] Delete | [Q/ESC] Quit")
-
-    spelled_text = ""
+    logger.info("ASL Studio running.")
+    logger.info("Workflow: Hold signs to spell -> Show 👍 Thumbs-Up to Confirm & Speak word.")
+    logger.info("Controls: [Hold Sign]: Add  |  [👍 Thumbs-Up]: Speak  |  [Del]: Backspace  |  [C]: Clear  |  [R]: Repeat  |  [Q]: Quit")
 
     try:
         while True:
@@ -197,6 +256,7 @@ def main() -> None:
             raw_letter = "None"
             confidence = 0.0
             debug_info = None
+            effective_handedness = "Right"
 
             if hands:
                 primary_hand = hands[0]
@@ -206,7 +266,7 @@ def main() -> None:
                 if mirror_mode:
                     effective_handedness = "Left" if effective_handedness == "Right" else "Right"
 
-                # Apply landmark EMA smoothing to eliminate high-frequency jitter
+                # Apply landmark smoothing to eliminate high-frequency jitter
                 if enable_smoothing:
                     smoothed_lm = landmark_smoother.update(primary_hand.landmarks_normalized)
                     primary_hand.landmarks_normalized = smoothed_lm
@@ -229,6 +289,7 @@ def main() -> None:
                     primary_hand.landmarks_normalized,
                     handedness=effective_handedness,
                     dynamic_gesture=dynamic_stroke,
+                    precomputed_m=debug_info,
                 )
             else:
                 landmark_smoother.reset()
@@ -238,14 +299,41 @@ def main() -> None:
             # Debounce prediction to stabilize letter display
             active_letter, active_conf = debouncer.update(raw_letter, confidence)
 
-            # Calculate word auto-completion suggestions for current prefix
-            suggestions: List[str] = []
-            if word_predictor and spelled_text:
-                current_word = spelled_text.split()[-1] if not spelled_text.endswith(" ") else ""
-                if current_word:
-                    suggestions = word_predictor.predict(current_word, max_results=3)
+            # Process frame through Gesture Event Manager
+            hand_lm = hands[0].landmarks_normalized if hands else None
+            gesture_event = event_manager.process_frame(
+                raw_letter=active_letter,
+                confidence=active_conf,
+                landmarks=hand_lm,
+                debug_info=debug_info,
+                handedness=effective_handedness,
+                is_tts_speaking=speech_manager.is_speaking,
+            )
 
-            # Render ASL HUD
+            # Handle discrete gesture events
+            if gesture_event.event_type == EventType.LETTER:
+                word_builder.add_letter(gesture_event.value)
+                logger.info("Committed letter '%s' -> Formed word: '%s'", gesture_event.value, word_builder.current_word)
+            elif gesture_event.event_type == EventType.CONFIRM:
+                confirmed_word = word_builder.confirm()
+                if confirmed_word:
+                    logger.info("Confirmed word '%s' via 👍 Thumbs-Up! Pronouncing aloud...", confirmed_word)
+                    speech_manager.speak(confirmed_word)
+                    if spelled_text:
+                        spelled_text += " " + confirmed_word
+                    else:
+                        spelled_text = confirmed_word
+            elif gesture_event.event_type == EventType.DELETE:
+                deleted = word_builder.delete_last()
+                if deleted:
+                    logger.info("Deleted letter '%s' -> Current word: '%s'", deleted, word_builder.current_word)
+
+            # Calculate word auto-completion suggestions for current formed word
+            suggestions: List[str] = []
+            if word_predictor and word_builder.current_word:
+                suggestions = word_predictor.predict(word_builder.current_word, max_results=3)
+
+            # Render ASL HUD with word formation, buttons, status, and hold progress
             rendered = visualizer.render(
                 frame=frame,
                 hands=hands,
@@ -254,6 +342,13 @@ def main() -> None:
                 spelled_text=spelled_text,
                 debug_info=debug_info,
                 suggestions=suggestions,
+                system_state=gesture_event.state.value,
+                current_word=word_builder.current_word,
+                letter_sequence=word_builder.letter_sequence,
+                hold_progress=gesture_event.progress,
+                last_spoken_word=speech_manager.last_spoken_word,
+                tts_status=speech_manager.status_text,
+                active_control="THUMBS_UP" if gesture_event.state == SystemState.CONFIRMING else "NONE",
             )
 
             cv2.imshow(window_name, rendered)
@@ -261,48 +356,46 @@ def main() -> None:
             key = cv2.waitKey(1) & 0xFF
             if key in (ord("q"), 27):  # 'q' or ESC
                 break
-            elif key == ord(" "):  # Space: append current letter or space
-                if active_letter not in ("None", "-", "Unknown"):
-                    spelled_text += active_letter
-                else:
-                    if spelled_text and not spelled_text.endswith(" "):
-                        last_word = spelled_text.split()[-1]
-                        tts.speak(last_word)
-                    spelled_text += " "
+            elif key in (10, 13):  # ENTER: Manual Confirm & Speak
+                confirmed = word_builder.confirm()
+                if confirmed:
+                    logger.info("Manual Confirm [ENTER] -> Speaking '%s'", confirmed)
+                    speech_manager.speak(confirmed)
+            elif key == ord(" "):  # Space: Manual Add current letter or confirm
+                if active_letter not in ("None", "-", "Unknown") and active_conf >= 0.92:
+                    word_builder.add_letter(active_letter)
+                elif not word_builder.is_empty():
+                    confirmed = word_builder.confirm()
+                    if confirmed:
+                        speech_manager.speak(confirmed)
             elif key == 9:  # TAB key: accept top auto-complete suggestion
                 if suggestions:
                     top_word = suggestions[0]
-                    words = spelled_text.rstrip().split()
-                    if words:
-                        words[-1] = top_word
-                        spelled_text = " ".join(words) + " "
-                    else:
-                        spelled_text = top_word + " "
-                    tts.speak(top_word)
-            elif key in (ord("c"), ord("C")):  # 'C': Clear
+                    word_builder.clear()
+                    for ch in top_word:
+                        word_builder.add_letter(ch)
+                    confirmed = word_builder.confirm()
+                    if confirmed:
+                        speech_manager.speak(confirmed)
+            elif key in (ord("c"), ord("C")):  # 'C': Clear word buffer and display
+                word_builder.clear()
                 spelled_text = ""
-            elif key in (ord("r"), ord("R")):  # 'R': Record real-world landmark sample for current gesture
-                if hands and active_letter not in ("None", "-", "Unknown"):
-                    import csv
-                    rec_csv = "data/real_world_landmarks.csv"
-                    os.makedirs("data", exist_ok=True)
-                    if not os.path.exists(rec_csv):
-                        with open(rec_csv, "w", newline="", encoding="utf-8") as f:
-                            csv.writer(f).writerow(["label", "handedness"] + [f"c{i}" for i in range(63)] + [f"n{i}" for i in range(63)])
-                    c_lm, _ = normalizer.canonical_align(hands[0].landmarks_normalized, handedness=effective_handedness)
-                    n_lm = normalizer.normalize(hands[0].landmarks_normalized)
-                    with open(rec_csv, "a", newline="", encoding="utf-8") as f:
-                        csv.writer(f).writerow([active_letter, effective_handedness] + c_lm.flatten().tolist() + n_lm.tolist())
-                    logger.info("Captured real-world training sample for '%s' -> %s", active_letter, rec_csv)
-            elif key in (8, 127):  # Backspace
-                spelled_text = spelled_text[:-1]
+                logger.info("Key [C] pressed -> Cleared word buffer and reset display")
+            elif key in (ord("r"), ord("R")):  # 'R': Repeat last spoken word
+                speech_manager.repeat_last()
+            elif key in (8, 127):  # Backspace: Delete last letter
+                deleted = word_builder.delete_last()
+                if not deleted and spelled_text:
+                    spelled_text = spelled_text[:-1].rstrip()
+                    logger.info("Key [Backspace] pressed -> Backspaced spelled text to '%s'", spelled_text)
 
     except KeyboardInterrupt:
         logger.info("Keyboard interrupt received.")
     finally:
-        logger.info("Shutting down camera and closing windows...")
+        logger.info("Shutting down camera, TTS engine, and closing windows...")
         camera.stop()
         tracker.close()
+        speech_manager.shutdown()
         cv2.destroyAllWindows()
         logger.info("Application cleanly closed.")
 

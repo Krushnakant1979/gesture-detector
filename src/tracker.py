@@ -125,11 +125,19 @@ class HandTracker:
 
         h, w, _ = frame_bgr.shape
 
-        # Enhance frame contrast under poor/backlit lighting if CLAHE is enabled
-        processed_bgr = self.preprocess_frame(frame_bgr) if self.enable_clahe else frame_bgr
-
-        # MediaPipe requires RGB format
-        frame_rgb = cv2.cvtColor(processed_bgr, cv2.COLOR_BGR2RGB)
+        # Enhance frame contrast and convert to RGB format for MediaPipe.
+        # Direct LAB -> RGB conversion avoids redundant intermediate BGR buffer allocation.
+        if self.enable_clahe and self.clahe is not None:
+            try:
+                lab = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2LAB)
+                l_chan, a_chan, b_chan = cv2.split(lab)
+                cl = self.clahe.apply(l_chan)
+                enhanced_lab = cv2.merge((cl, a_chan, b_chan))
+                frame_rgb = cv2.cvtColor(enhanced_lab, cv2.COLOR_LAB2RGB)
+            except Exception:
+                frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        else:
+            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
 
         if self._is_video_mode:
@@ -163,19 +171,27 @@ class HandTracker:
                     handedness_label = categories[0].category_name or categories[0].display_name or "Unknown"
                     confidence = float(categories[0].score)
 
-            # Extract 21 points
-            coords_norm = np.zeros((21, 3), dtype=np.float32)
-            coords_pixel = np.zeros((21, 2), dtype=np.int32)
+            # Fast single-pass point conversion and bounding box calculation
+            coords_norm = np.empty((21, 3), dtype=np.float32)
+            coords_pixel = np.empty((21, 2), dtype=np.int32)
 
             for i, lm in enumerate(landmarks):
-                coords_norm[i] = [lm.x, lm.y, lm.z]
-                coords_pixel[i] = [int(lm.x * w), int(lm.y * h)]
+                coords_norm[i, 0] = lm.x
+                coords_norm[i, 1] = lm.y
+                coords_norm[i, 2] = lm.z
+                coords_pixel[i, 0] = int(lm.x * w)
+                coords_pixel[i, 1] = int(lm.y * h)
+
+            # Suppress false-positive landmark hallucinations (e.g. ghost extended index finger on a closed fist)
+            coords_norm, coords_pixel, px_min, py_min, px_max, py_max = self.sanitize_hallucinations(
+                coords_norm, coords_pixel, w, h
+            )
 
             # Compute bounding box with padding
-            x_min = max(0, int(np.min(coords_pixel[:, 0])) - self.box_padding)
-            y_min = max(0, int(np.min(coords_pixel[:, 1])) - self.box_padding)
-            x_max = min(w, int(np.max(coords_pixel[:, 0])) + self.box_padding)
-            y_max = min(h, int(np.max(coords_pixel[:, 1])) + self.box_padding)
+            x_min = max(0, px_min - self.box_padding)
+            y_min = max(0, py_min - self.box_padding)
+            x_max = min(w, px_max + self.box_padding)
+            y_max = min(h, py_max + self.box_padding)
             bbox = (x_min, y_min, x_max - x_min, y_max - y_min)
 
             detected_hands.append(
@@ -189,6 +205,52 @@ class HandTracker:
             )
 
         return detected_hands
+
+    @staticmethod
+    def sanitize_hallucinations(
+        coords_norm: np.ndarray,
+        coords_pixel: np.ndarray,
+        w: int,
+        h: int,
+    ) -> Tuple[np.ndarray, np.ndarray, int, int, int, int]:
+        """
+        Suppresses false-positive / hallucinated landmark regressions in empty background space.
+        When a hand is in a closed fist facing the camera, MediaPipe can latch onto vertical background edges
+        and hallucinate an index finger (or other finger) extending up into empty air even though all other fingers
+        form a curled fist.
+        Detects this biomechanical inconsistency and clamps the hallucinated tip back down into the fist.
+        """
+        ref = float(np.linalg.norm(coords_norm[9] - coords_norm[0]))
+        if ref >= 1e-4:
+            is_screen_space = bool(coords_norm[0, 1] > coords_norm[9, 1])
+
+            # Check if middle, ring, and pinky are all curled in a fist
+            mid_curled = bool(coords_norm[12, 1] >= coords_norm[9, 1] - 0.05 * ref) if is_screen_space else bool(coords_norm[12, 1] <= coords_norm[9, 1] + 0.05 * ref)
+            rng_curled = bool(coords_norm[16, 1] >= coords_norm[13, 1] - 0.05 * ref) if is_screen_space else bool(coords_norm[16, 1] <= coords_norm[13, 1] + 0.05 * ref)
+            pnk_curled = bool(coords_norm[20, 1] >= coords_norm[17, 1] - 0.05 * ref) if is_screen_space else bool(coords_norm[20, 1] <= coords_norm[17, 1] + 0.05 * ref)
+
+            # Check if index PIP is aligned in the fist row with middle PIP
+            pip_row_aligned = bool(abs(coords_norm[6, 1] - coords_norm[10, 1]) < 0.08 * ref)
+
+            # Check if index tip elevation above middle PIP is unnaturally short (< 0.35 * ref)
+            tip_elev = float((coords_norm[10, 1] - coords_norm[8, 1]) / ref) if is_screen_space else float((coords_norm[8, 1] - coords_norm[10, 1]) / ref)
+
+            if mid_curled and rng_curled and pnk_curled and pip_row_aligned and tip_elev < 0.35:
+                # Index finger is hallucinated in empty space while real index is curled in fist!
+                delta_dip = coords_norm[11] - coords_norm[10]
+                delta_tip = coords_norm[12] - coords_norm[10]
+                coords_norm[7] = coords_norm[6] + delta_dip
+                coords_norm[8] = coords_norm[6] + delta_tip
+                coords_pixel[7, 0] = int(coords_norm[7, 0] * w)
+                coords_pixel[7, 1] = int(coords_norm[7, 1] * h)
+                coords_pixel[8, 0] = int(coords_norm[8, 0] * w)
+                coords_pixel[8, 1] = int(coords_norm[8, 1] * h)
+
+        px_min = int(np.min(coords_pixel[:, 0]))
+        py_min = int(np.min(coords_pixel[:, 1]))
+        px_max = int(np.max(coords_pixel[:, 0]))
+        py_max = int(np.max(coords_pixel[:, 1]))
+        return coords_norm, coords_pixel, px_min, py_min, px_max, py_max
 
     def close(self) -> None:
         """Closes the MediaPipe detector instance."""

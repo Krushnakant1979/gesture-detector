@@ -39,14 +39,23 @@ visualizer:
 classifier:
   mode: "hybrid"           # "hybrid" (heuristic + ML fallback), "heuristic", or "ml"
   model_path: "models/lightgbm_classifier.pkl" # LightGBM gradient-boosted decision forest
-  min_confidence: 0.70
-  ml_fallback_min_confidence: 0.75
+  min_confidence: 0.92     # Strictly require >= 92% accuracy to output an alphabet
+  ml_fallback_min_confidence: 0.92
   enable_lstm: true        # LSTMR Recurrent Sequence Recognizer for dynamic motions
   lstm_model_path: "models/lstm_gesture_model.npz"
 
 speller:
-  enable_tts: true         # Speak completed words aloud on [SPACE]
+  enable_tts: true         # Speak completed words aloud on [SPACE] or Thumbs-Up
   enable_autocomplete: true # Word suggestion HUD & [TAB] completion
+
+word_builder:
+  hold_frames: 10          # Frames (~0.33s at 30 FPS) gesture must be held to append letter
+  confirm_hold_frames: 8   # Frames thumbs-up must be held to confirm & pronounce word
+  cooldown_frames: 6       # Cooldown frames after committing an event
+  neutral_frames: 3        # Frames of neutral pose required between repeated letters (e.g. HELLO)
+  min_confidence: 0.92     # Confidence threshold to accept gestures
+  enable_tts: true         # Non-blocking Text-To-Speech pronunciation of confirmed words
+  voice_rate: 150          # Natural speech rate (words per minute)
 
 heuristics:
   min_hand_span: 0.05
