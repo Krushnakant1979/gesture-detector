@@ -1,22 +1,94 @@
+# =============================================================================
+# Security & Secret Protection (.gitignore)
+# Prevents accidental exposure of credentials, tokens, keys, logs, and environments
+# =============================================================================
+
+# Credentials, Keys, Tokens & Private Certificates
+*.pem
+*.key
+*.p12
+*.pfx
+*.pkcs12
+*.crt
+*.cer
+id_rsa*
+id_ed25519*
+*.pub
+credentials.json
+client_secrets*.json
+service_account*.json
+token.json
+*.token
+*.passwd
+*.password
+*.htpasswd
+*.secret
+
+# Cloud & Container Credential Dirs
+.aws/
+.gcp/
+.azure/
+.docker/
+
+# Environment Variables & Local Secrets
+.env
+.env.*
+!.env.example
+*.env
+
+# Python Bytecode, Caches & Environments
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
 
-# Environments
-.env
-.venv
-env/
+# Virtual Environments
+.venv/
 venv/
+env/
 ENV/
+env.bak/
+venv.bak/
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
+# Packaging, Builds & Test Artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
 
-# Backups and temporary files
+# Logs, Dumps & Temp Files
+*.log
+logs/
+*.out
+*.tmp
+*.temp
+*.dmp
+*.dump
 *_backup.*
 *.bak
 scratch/
 
+# IDE & Editor Configurations
+.vscode/
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+
+# Operating System Metadata
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini

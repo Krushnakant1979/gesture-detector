@@ -45,8 +45,29 @@ def setup_logger() -> logging.Logger:
     return logging.getLogger("ASLApp")
 
 
+def _load_env_file(env_path: str = ".env") -> None:
+    """Safely loads local .env file if present, setting environment variables without external dependencies."""
+    if not os.path.exists(env_path):
+        return
+    try:
+        with open(env_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k = k.strip()
+                v = v.strip().strip("'\"")
+                if k and k not in os.environ:
+                    os.environ[k] = v
+    except Exception:
+        pass
+
+
 def load_config(config_path: str = "config/config.yaml") -> Dict[str, Any]:
-    """Loads YAML configuration with sane fallbacks."""
+    """Loads YAML configuration with sane fallbacks and secure environment variable overrides."""
+    _load_env_file()
+
     default_config: Dict[str, Any] = {
         "camera": {"device_id": 0, "width": 1280, "height": 720, "fps": 30, "reconnect_timeout_sec": 2.0},
         "tracker": {
@@ -92,15 +113,35 @@ def load_config(config_path: str = "config/config.yaml") -> Dict[str, Any]:
         "heuristics": {},
     }
 
-    if not os.path.exists(config_path):
-        return default_config
+    cfg = default_config.copy()
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                loaded = yaml.safe_load(f)
+                if loaded and isinstance(loaded, dict):
+                    cfg.update(loaded)
+        except Exception:
+            pass
 
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
-            return cfg or default_config
-    except Exception:
-        return default_config
+    # Secure environment variable overrides for multi-environment deployments
+    if "ASL_CAMERA_DEVICE_ID" in os.environ:
+        try:
+            cfg.setdefault("camera", {})["device_id"] = int(os.environ["ASL_CAMERA_DEVICE_ID"])
+        except ValueError:
+            pass
+    if "ASL_MIN_CONFIDENCE" in os.environ:
+        try:
+            val = float(os.environ["ASL_MIN_CONFIDENCE"])
+            cfg.setdefault("classifier", {})["min_confidence"] = val
+            cfg.setdefault("word_builder", {})["min_confidence"] = val
+        except ValueError:
+            pass
+    if "ASL_ENABLE_TTS" in os.environ:
+        tts_flag = os.environ["ASL_ENABLE_TTS"].lower() in ("true", "1", "yes")
+        cfg.setdefault("speller", {})["enable_tts"] = tts_flag
+        cfg.setdefault("word_builder", {})["enable_tts"] = tts_flag
+
+    return cfg
 
 
 def main() -> None:

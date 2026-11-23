@@ -131,12 +131,25 @@ filter:
 
 motion_detector:
   enable_steady_gate: true # Suppress output while hand is moving; show once held steady
-  motion_threshold: 0.07   # Hand displacement / scale threshold
-  min_steady_frames: 3     # Consecutive steady frames before unlocking letter output
+  motion_threshold: 0.040  # Hand displacement / scale threshold
+  min_steady_frames: 6     # Consecutive steady frames before unlocking letter output
 
 word_builder:
-  hold_frames: 10          # Frames (~0.33s at 30 FPS) gesture must be held to append letter
-  confirm_hold_frames: 8   # Frames thumbs-up must be held to confirm & pronounce word
+  hold_frames: 18          # Frames (~0.60s at 30 FPS) gesture must be steadily held to commit letter
+  confirm_hold_frames: 14  # Frames thumbs-up must be held to confirm & pronounce word
+  cooldown_frames: 12      # Cooldown frames after committing an event
+  neutral_frames: 8        # Frames of neutral pose required between repeated letters (e.g. HELLO)
   min_confidence: 0.92     # Confidence threshold to accept gestures
   enable_tts: true         # Offline voice synthesis
 ```
+
+---
+
+## 🔒 Security & Privacy
+
+This project adheres to strict data privacy and security standards:
+
+- **100% On-Device / Local Processing**: Video frames, 3D hand landmarks, and speech audio are processed strictly in volatile system memory (RAM). No data is ever transmitted to external servers, cloud services, or third-party APIs.
+- **Credential & Secret Protection**: No API keys, credentials, or personal secrets are required or stored in the repository. A comprehensive `.gitignore` blocks sensitive files (`.env`, certificates, tokens, SSH keys).
+- **Environment Configuration**: For multi-environment setups, copy `.env.example` to `.env` to configure settings safely via environment variables.
+- **Security Policy**: See [SECURITY.md](SECURITY.md) for vulnerability reporting guidelines and security architecture details.
