@@ -174,6 +174,7 @@ class ModernVisualizer:
         last_spoken_word: str = "",
         tts_status: str = "IDLE",
         active_control: str = "NONE",
+        is_steady: bool = True,
     ) -> np.ndarray:
         """Renders the comprehensive ASL Alphabet and Word Formation HUD."""
         fps = self.update_fps()
@@ -230,6 +231,11 @@ class ModernVisualizer:
             cv2.putText(frame, active_letter, (badge_x + 95, badge_y + 82), cv2.FONT_HERSHEY_DUPLEX, 1.8, self.theme_color, 3, cv2.LINE_AA)
             # Accuracy Percentage
             cv2.putText(frame, f"{int(confidence * 100)}%", (badge_x + badge_w - 52, badge_y + 80), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1, cv2.LINE_AA)
+        elif len(hands) > 0 and not is_steady:
+            cv2.putText(frame, "DETECTED LETTER", (badge_x + 18, badge_y + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (170, 170, 170), 1, cv2.LINE_AA)
+            motion_color = (0, 215, 255)
+            cv2.putText(frame, "HOLD STEADY", (badge_x + 18, badge_y + 72), cv2.FONT_HERSHEY_DUPLEX, 0.82, motion_color, 2, cv2.LINE_AA)
+            cv2.putText(frame, "Hold sign steady to detect", (badge_x + 18, badge_y + 112), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (200, 200, 200), 1, cv2.LINE_AA)
         elif len(hands) > 0:
             cv2.putText(frame, "DETECTED LETTER", (badge_x + 18, badge_y + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (170, 170, 170), 1, cv2.LINE_AA)
             warn_color = (0, 165, 255)

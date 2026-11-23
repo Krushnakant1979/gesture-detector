@@ -421,6 +421,52 @@ def test_user_uploaded_a_vs_thumbs_up():
             confirmed = wb_test.confirm()
     assert confirmed == "TEST", f"Expected confirmed word TEST, got {confirmed}"
 
+    # Image 4 (User's thumb confirm gesture image, media_1795433764199_af4eca8d.jpg)
+    w4, h4 = 547.0, 613.0
+    lm4 = np.zeros((21, 3), dtype=np.float32)
+    lm4[0] = [408 / w4, 402 / h4, 0]
+    lm4[1] = [358 / w4, 324 / h4, 0]
+    lm4[2] = [278 / w4, 247 / h4, 0]
+    lm4[3] = [221 / w4, 192 / h4, 0]
+    lm4[4] = [203 / w4, 137 / h4, 0]
+    lm4[5] = [219 / w4, 262 / h4, 0]
+    lm4[6] = [164 / w4, 327 / h4, 0]
+    lm4[7] = [131 / w4, 314 / h4, 0]
+    lm4[8] = [197 / w4, 315 / h4, 0]
+    lm4[9] = [221 / w4, 313 / h4, 0]
+    lm4[10] = [165 / w4, 367 / h4, 0]
+    lm4[11] = [126 / w4, 357 / h4, 0]
+    lm4[12] = [203 / w4, 356 / h4, 0]
+    lm4[13] = [229 / w4, 368 / h4, 0]
+    lm4[14] = [178 / w4, 411 / h4, 0]
+    lm4[15] = [141 / w4, 403 / h4, 0]
+    lm4[16] = [213 / w4, 400 / h4, 0]
+    lm4[17] = [239 / w4, 426 / h4, 0]
+    lm4[18] = [191 / w4, 446 / h4, 0]
+    lm4[19] = [164 / w4, 440 / h4, 0]
+    lm4[20] = [222 / w4, 440 / h4, 0]
+
+    for hand in ("Left", "Right"):
+        m4 = norm.analyze_hand(lm4, hand)
+        tu4, conf4 = cgr.is_thumbs_up(lm4, m4, hand)
+        letter4, _ = clf.classify(lm4, handedness=hand, precomputed_m=m4)
+        assert tu4 and conf4 >= 0.95, f"User's thumb confirm gesture ({hand}) should trigger is_thumbs_up, got {tu4} ({conf4:.2f})"
+        assert letter4 is None or letter4 == "None", f"User's thumb gesture ({hand}) must not be classified as alphabet letter, got {letter4}"
+
+    wb_test2 = WordBuilder()
+    wb_test2.add_letter("U")
+    wb_test2.add_letter("S")
+    wb_test2.add_letter("E")
+    wb_test2.add_letter("R")
+    gem_test2 = GestureEventManager(confirm_hold_frames=3)
+    m4_l = norm.analyze_hand(lm4, "Left")
+    confirmed2 = None
+    for _ in range(4):
+        ev = gem_test2.process_frame("None", 0.0, lm4, m4_l, handedness="Left")
+        if ev.event_type == EventType.CONFIRM:
+            confirmed2 = wb_test2.confirm()
+    assert confirmed2 == "USER", f"Expected confirmed word USER, got {confirmed2}"
+
 
 if __name__ == "__main__":
     print("Running Word Builder, Event Manager & TTS Test Suite...")

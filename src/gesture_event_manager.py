@@ -66,10 +66,10 @@ class GestureEventManager:
 
     def __init__(
         self,
-        hold_frames: int = 10,              # Frames gesture must be steadily held (~0.33s at 30 FPS)
-        confirm_hold_frames: int = 8,       # Frames thumbs-up must be held for confirmation
-        cooldown_frames: int = 6,           # Cooldown frames after committing an event (~0.20s)
-        neutral_frames_required: int = 3,   # Frames of neutral/open pose required to reset lockout
+        hold_frames: int = 18,              # Frames gesture must be steadily held (~0.60s at 30 FPS)
+        confirm_hold_frames: int = 14,      # Frames thumbs-up must be held for confirmation (~0.47s)
+        cooldown_frames: int = 12,          # Cooldown frames after committing an event (~0.40s)
+        neutral_frames_required: int = 8,   # Frames of neutral/open pose required to reset repeat lockout (~0.27s)
         min_confidence: float = 0.92,       # Calibrated confidence gate
     ) -> None:
         self.hold_frames = max(2, hold_frames)
@@ -102,6 +102,7 @@ class GestureEventManager:
         debug_info: Optional[Dict[str, Any]],
         handedness: str = "Right",
         is_tts_speaking: bool = False,
+        is_steady: bool = True,
     ) -> GestureEvent:
         """
         Processes a single webcam frame and returns a discrete GestureEvent.
@@ -122,6 +123,21 @@ class GestureEventManager:
             return GestureEvent(
                 EventType.NONE,
                 state=SystemState.COOLDOWN,
+                progress=0.0,
+            )
+
+        # If the hand is in motion (moving between gestures or shaking),
+        # do not accumulate hold frames or commit gestures until steady
+        if not is_steady:
+            self.candidate_letter = ""
+            self.candidate_hold_count = 0
+            self.control_candidate = ControlGestureType.NONE
+            self.control_hold_count = 0
+            self.neutral_counter = 0  # Moving hand cannot count toward neutral reset
+            self.current_state = SystemState.WAITING
+            return GestureEvent(
+                EventType.NONE,
+                state=SystemState.WAITING,
                 progress=0.0,
             )
 

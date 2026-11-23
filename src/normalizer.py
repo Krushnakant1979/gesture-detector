@@ -178,15 +178,16 @@ class LandmarkNormalizer:
             d_pip_mcp = float(np.linalg.norm(pip - mcp))
             ratio = float(d_tip_mcp / (d_pip_mcp + 1e-5))
 
-            # Pinky has a higher threshold when the hand is horizontal to avoid counting a curled pinky inside fist as extended
-            min_ext_thresh = 0.52 * ref_scale if (tip_idx == 20 and is_hand_horizontal) else 0.36 * ref_scale
+            # Pinky has a higher threshold to avoid counting a curled pinky inside fist or U/V as extended
+            min_ext_thresh = 0.48 * ref_scale if tip_idx == 20 else 0.36 * ref_scale
             is_ext_len = bool(d_tip_mcp > min_ext_thresh)
             dx = abs(tip[0] - mcp[0])
             dy = abs(tip[1] - mcp[1])
             dz = abs(tip[2] - mcp[2])
             is_horiz = bool(is_ext_len and dx > 0.25 * ref_scale and dx > 0.65 * dy)
             is_forward = bool(is_ext_len and dz > 0.20 * ref_scale)
-            is_up = bool(is_ext_len and ((tip[1] - mcp[1]) * sign_y > 0.15 * ref_scale) and (dy > 0.70 * dx) and not (tip_idx == 20 and is_hand_horizontal))
+            pip_up_ok = bool(tip_idx != 20 or ((tip[1] - pip[1]) * sign_y > 0.02 * ref_scale and (tip[1] - lm[19][1]) * sign_y >= -0.01 * ref_scale))
+            is_up = bool(is_ext_len and ((tip[1] - mcp[1]) * sign_y > 0.15 * ref_scale) and (dy > 0.70 * dx) and not (tip_idx == 20 and is_hand_horizontal) and pip_up_ok)
             is_down = bool(d_tip_mcp > 0.55 * ref_scale and ((tip[1] - pip[1]) * sign_y < -0.12 * ref_scale))
 
             extended = bool(is_up or is_down or is_horiz or is_forward or d_tip_mcp > 0.45 * ref_scale)
@@ -248,6 +249,25 @@ class LandmarkNormalizer:
 
         is_thumb_in_finger_corridor = bool(x_left <= thumb_tip[0] <= x_right)
 
+        # Check for crossed fingers geometry (used to prevent false K on R handshape)
+        v_mcp_im = lm[9][:2] - lm[5][:2]
+        v_tip_im = lm[12][:2] - lm[8][:2]
+        dot_tips_mcp = float(np.dot(v_tip_im, v_mcp_im))
+        crossed_by_x = bool((lm[8][0] - lm[12][0]) * (lm[5][0] - lm[9][0]) < 0)
+        crossed_by_dot = bool(dot_tips_mcp < -1e-6)
+
+        def _ccw_r(A: np.ndarray, B: np.ndarray, C: np.ndarray) -> bool:
+            return bool((C[1] - A[1]) * (B[0] - A[0]) > (B[1] - A[1]) * (C[0] - A[0]))
+
+        def _segments_intersect_r(A: np.ndarray, B: np.ndarray, C: np.ndarray, D: np.ndarray) -> bool:
+            return bool(_ccw_r(A, C, D) != _ccw_r(B, C, D) and _ccw_r(A, B, C) != _ccw_r(A, B, D))
+
+        seg_crossed = bool(
+            _segments_intersect_r(lm[5][:2], lm[8][:2], lm[9][:2], lm[12][:2])
+            or _segments_intersect_r(lm[6][:2], lm[8][:2], lm[10][:2], lm[12][:2])
+        )
+        are_crossed_geometry = bool(crossed_by_x or crossed_by_dot or seg_crossed)
+
         # Thumb is elevated (not folded flat onto ring/pinky finger)
         is_thumb_elevated = bool(
             (h_thumb > 0.04 or thumb_tip[1] < min(lm[5][1], lm[9][1]) + 0.08 * ref_scale)
@@ -260,9 +280,41 @@ class LandmarkNormalizer:
             and is_thumb_in_finger_corridor
         )
 
+        # ----------------------------------------------------------------
+        # INTER-TIP DISTANCE METRICS
+        # ----------------------------------------------------------------
+        d_thumb_index_tip = float(np.linalg.norm(thumb_tip - lm[8]) / ref_scale)
+        d_thumb_middle_tip = float(np.linalg.norm(thumb_tip - lm[12]) / ref_scale)
+        d_thumb_ring_tip = float(np.linalg.norm(thumb_tip - lm[16]) / ref_scale)
+        d_thumb_pinky_tip = float(np.linalg.norm(thumb_tip - lm[20]) / ref_scale)
+        d_index_middle_tip = float(np.linalg.norm(lm[8] - lm[12]) / ref_scale)
+        d_middle_ring_tip = float(np.linalg.norm(lm[12] - lm[16]) / ref_scale)
+        d_ring_pinky_tip = float(np.linalg.norm(lm[16] - lm[20]) / ref_scale)
+
+        # Transverse / lateral distance between index and middle fingers perpendicular to hand axis
+        u_long_2d = u_long[:2] / (np.linalg.norm(u_long[:2]) + 1e-5)
+        u_lat = np.array([-u_long_2d[1], u_long_2d[0]], dtype=np.float32)
+        v_tips_im = lm[12][:2] - lm[8][:2]
+        t_tips_im = abs(float(np.dot(v_tips_im, u_lat))) / ref_scale
+        v_mcp_im = lm[9][:2] - lm[5][:2]
+        t_mcp_im = abs(float(np.dot(v_mcp_im, u_lat))) / ref_scale
+        u_v_transverse_ratio = float(t_tips_im / (t_mcp_im + 1e-5))
+
+        d_mcp_im_2f = float(np.linalg.norm(lm[5][:2] - lm[9][:2]))
+        u_v_euclidean_ratio = float((d_index_middle_tip * ref_scale) / (d_mcp_im_2f + 1e-5))
+        u_v_spread_ratio = float(min(u_v_euclidean_ratio, u_v_transverse_ratio * 1.15))
+
+        fingers_together = bool(t_tips_im < 0.18 or u_v_transverse_ratio < 1.15 or d_index_middle_tip < 0.20)
+        fingers_spread_v = bool((t_tips_im >= 0.18 or u_v_transverse_ratio >= 1.15) and d_index_middle_tip >= 0.22)
+
+        # In ASL K, the thumb is wedged between index and middle, strictly requiring the fingers to be spread apart in a V (fingers_spread_v and not fingers_together).
+        # When fingers are touching together (fingers_together), the thumb cannot be between them (it rests in front, as in U).
         is_thumb_between_index_middle = bool(
             is_thumb_elevated
             and (is_thumb_near_im or (is_thumb_in_finger_corridor and is_thumb_pointing_up))
+            and not are_crossed_geometry
+            and fingers_spread_v
+            and not fingers_together
         )
 
         # ----------------------------------------------------------------
@@ -281,44 +333,84 @@ class LandmarkNormalizer:
         )
 
         # ----------------------------------------------------------------
-        # INTER-TIP DISTANCE METRICS
-        # ----------------------------------------------------------------
-        d_thumb_index_tip = float(np.linalg.norm(thumb_tip - lm[8]) / ref_scale)
-        d_thumb_middle_tip = float(np.linalg.norm(thumb_tip - lm[12]) / ref_scale)
-        d_thumb_ring_tip = float(np.linalg.norm(thumb_tip - lm[16]) / ref_scale)
-        d_thumb_pinky_tip = float(np.linalg.norm(thumb_tip - lm[20]) / ref_scale)
-        d_index_middle_tip = float(np.linalg.norm(lm[8] - lm[12]) / ref_scale)
-        d_middle_ring_tip = float(np.linalg.norm(lm[12] - lm[16]) / ref_scale)
-        d_ring_pinky_tip = float(np.linalg.norm(lm[16] - lm[20]) / ref_scale)
-
-        # ----------------------------------------------------------------
         # LETTER R: Index and Middle CROSSED
         # ----------------------------------------------------------------
-        crossed_by_x = bool((lm[8][0] - lm[12][0]) * (lm[5][0] - lm[9][0]) < 0)
         are_index_middle_crossed = bool(
             up_index and up_middle
             and not is_hand_horizontal
-            and not is_thumb_between_index_middle
-            and crossed_by_x
+            and not is_hand_pointing_down
+            and not (up_ring or up_pinky)
+            and are_crossed_geometry
         )
+        is_R_shape = are_index_middle_crossed
+
+
+        # ----------------------------------------------------------------
+        # FINGER STRAIGHTNESS & CURVATURE INVARIANTS
+        # Ratio of MCP-to-TIP Euclidean distance to total joint perimeter.
+        # Straight fingers (B, open palm, high five): straightness >= 0.88
+        # Arched/curled fingers (C, O, fist variants): straightness < 0.84
+        # ----------------------------------------------------------------
+        def _finger_straightness(mcp_idx: int) -> float:
+            chord = float(np.linalg.norm(lm[mcp_idx + 3] - lm[mcp_idx]))
+            perimeter = (
+                float(np.linalg.norm(lm[mcp_idx + 1] - lm[mcp_idx]))
+                + float(np.linalg.norm(lm[mcp_idx + 2] - lm[mcp_idx + 1]))
+                + float(np.linalg.norm(lm[mcp_idx + 3] - lm[mcp_idx + 2]))
+            )
+            return chord / (perimeter + 1e-5)
+
+        straight_idx = _finger_straightness(5)
+        straight_mid = _finger_straightness(9)
+        straight_rng = _finger_straightness(13)
+        straight_pnk = _finger_straightness(17)
+
+        are_fingers_arched = bool(straight_idx < 0.84 or straight_mid < 0.84)
+        up_all_4 = bool(up_index and up_middle and up_ring and up_pinky)
+        straight_fingers = bool(straight_idx > 0.88 and straight_mid > 0.88 and straight_rng > 0.88)
 
         # ----------------------------------------------------------------
         # LETTER X: Index hooked back
         # ----------------------------------------------------------------
         d_index_tip_mcp = float(np.linalg.norm(lm[8] - lm[5]) / ref_scale)
-        pip_elevated = bool(
-            lm[6][1] < lm[5][1] - 0.15 * ref_scale
-            and lm[6][1] < lm[10][1] - 0.05 * ref_scale
+        pip_elevated = bool((lm[6][1] - lm[5][1]) * sign_y > 0.03 * ref_scale)
+        tip_hooked_down = bool((lm[8][1] - lm[6][1]) * sign_y < -0.02 * ref_scale)
+
+        v_mcp_pip = lm[6][:2] - lm[5][:2]
+        v_pip_tip = lm[8][:2] - lm[6][:2]
+        norm_mp = float(np.linalg.norm(v_mcp_pip))
+        norm_pt = float(np.linalg.norm(v_pip_tip))
+        dot_pip_idx = float(np.dot(v_mcp_pip, v_pip_tip) / (norm_mp * norm_pt + 1e-5))
+
+        is_index_bent = bool(
+            dot_pip_idx <= 0.88
+            or straight_idx <= 0.84
+            or tip_hooked_down
         )
-        tip_hooked_down = bool(lm[8][1] > lm[6][1])
+        is_elevated_index = bool(
+            d_index_tip_mcp >= 0.28
+            and (ext_index or up_index or d_index_tip_mcp >= 0.30)
+        )
+        downward_mid_slope_x = float((lm[12][1] - lm[9][1]) * (-sign_y) / ref_scale)
+        downward_idx_slope_x = float((lm[8][1] - lm[5][1]) * (-sign_y) / ref_scale)
+
         index_hooked = bool(
-            not ext_index
+            is_elevated_index
             and pip_elevated
-            and tip_hooked_down
-            and d_index_tip_mcp > 0.22
-            and d_thumb_index_tip > 0.32
-            and not ext_middle and not ext_ring and not ext_pinky
+            and is_index_bent
+            and not (up_middle or up_ring or up_pinky)
+            and not (horiz_middle and straight_mid >= 0.80)
+            and not (straight_mid > 0.50 and straight_rng > 0.50 and d_index_middle_tip < 0.38)
+            and not (downward_mid_slope_x >= 0.35)
+            and not (downward_idx_slope_x >= 0.35)
+            and not thumb_index_parallel
+            and not (horiz_index and not up_index)
+            and not is_hand_horizontal
+            and d_thumb_middle_tip > 0.20
+            and not is_hand_pointing_down
+            and not down_index
         )
+        is_X_shape = index_hooked
 
         # ----------------------------------------------------------------
         # LETTER O: Fingertips converge to thumb tip in circle
@@ -366,29 +458,109 @@ class LandmarkNormalizer:
             and d_index_tip_mcp >= 0.58
         )
 
-        # ----------------------------------------------------------------
-        # FINGER STRAIGHTNESS & CURVATURE INVARIANTS
-        # Ratio of MCP-to-TIP Euclidean distance to total joint perimeter.
-        # Straight fingers (B, open palm, high five): straightness >= 0.88
-        # Arched/curled fingers (C, O, fist variants): straightness < 0.84
-        # ----------------------------------------------------------------
-        def _finger_straightness(mcp_idx: int) -> float:
-            chord = float(np.linalg.norm(lm[mcp_idx + 3] - lm[mcp_idx]))
-            perimeter = (
-                float(np.linalg.norm(lm[mcp_idx + 1] - lm[mcp_idx]))
-                + float(np.linalg.norm(lm[mcp_idx + 2] - lm[mcp_idx + 1]))
-                + float(np.linalg.norm(lm[mcp_idx + 3] - lm[mcp_idx + 2]))
-            )
-            return chord / (perimeter + 1e-5)
 
-        straight_idx = _finger_straightness(5)
-        straight_mid = _finger_straightness(9)
-        straight_rng = _finger_straightness(13)
-        straight_pnk = _finger_straightness(17)
+        # ----------------------------------------------------------------
+        # LETTER U and V: Two fingers pointing UP
+        # In U: Index and Middle extended UP together (parallel/touching, spread_ratio < 1.25)
+        # In V: Index and Middle extended UP spread apart into a V (spread_ratio >= 1.25)
+        # Ring and pinky curled into palm (not up).
+        # Thumb folded across ring/pinky (not extended out, not between fingers).
+        # Fingers not crossed (not R).
+        # Hand upright (not horizontal H, not downward P/N).
+        # ----------------------------------------------------------------
+        is_U_shape = bool(
+            up_index
+            and up_middle
+            and not (up_ring or up_pinky)
+            and not are_index_middle_crossed
+            and not is_thumb_between_index_middle
+            and not (thumb_extended_out and (t_thumb < -0.20 or is_thumb_horizontal))
+            and not is_hand_horizontal
+            and not is_hand_pointing_down
+            and not (horiz_index and horiz_middle)
+            and not (down_index or down_middle)
+            and not index_hooked
+            and straight_idx >= 0.85
+            and straight_mid >= 0.85
+            and fingers_together
+        )
 
-        are_fingers_arched = bool(straight_idx < 0.84 or straight_mid < 0.84)
-        up_all_4 = bool(up_index and up_middle and up_ring and up_pinky)
-        straight_fingers = bool(straight_idx > 0.88 and straight_mid > 0.88 and straight_rng > 0.88)
+        is_V_shape = bool(
+            up_index
+            and up_middle
+            and not (up_ring or up_pinky)
+            and not are_index_middle_crossed
+            and not is_thumb_between_index_middle
+            and not thumb_extended_out
+            and not is_hand_horizontal
+            and not is_hand_pointing_down
+            and not (horiz_index and horiz_middle)
+            and not (down_index or down_middle)
+            and not index_hooked
+            and straight_idx >= 0.85
+            and straight_mid >= 0.85
+            and fingers_spread_v
+            and not fingers_together
+        )
+
+        # ----------------------------------------------------------------
+        # LETTER P: Downward K-shape (Index forward/down, Middle straight down)
+        # Index points forward/horizontally or down; Middle points down.
+        # Index and middle are spread apart like a K/scissors (spread_ratio > 1.80).
+        # Thumb rests near the middle finger joint.
+        # Ring and pinky are folded (not pointing up).
+        # Hand is turned horizontally or pointing down.
+        # ----------------------------------------------------------------
+        d_thumb_mid_pip = float(np.linalg.norm(thumb_tip - lm[10]) / ref_scale)
+        d_thumb_mid_dip = float(np.linalg.norm(thumb_tip - lm[11]) / ref_scale)
+        d_tip_im = float(np.linalg.norm(lm[8][:2] - lm[12][:2]))
+        d_mcp_im = float(np.linalg.norm(lm[5][:2] - lm[9][:2]))
+        p_spread_ratio = float(d_tip_im / (d_mcp_im + 1e-5))
+        downward_mid_slope = float((lm[12][1] - lm[9][1]) * (-sign_y) / ref_scale)
+        is_P_shape = bool(
+            ext_index
+            and downward_mid_slope >= 0.35
+            and not up_middle
+            and not up_ring
+            and not up_pinky
+            and d_index_middle_tip > 0.40
+            and p_spread_ratio >= 1.80
+            and (d_thumb_mid_pip < 0.55 or d_thumb_mid_dip < 0.50 or d_thumb_middle_tip < 0.65)
+        )
+
+        # ----------------------------------------------------------------
+        # LETTER Q: Downward G-shape (Index & thumb pointing downward parallel)
+        # Index points down or diagonally down (downward_idx_slope >= 0.35 or down_index).
+        # Index is extended straight: straight_idx >= 0.85.
+        # Thumb points downward/horizontally alongside index.
+        # Thumb and index are parallel (dot_thumb_index > 0.35 or thumb_index_parallel).
+        # Distance between thumb tip and index tip is small (d_thumb_index_tip <= 0.70).
+        # Middle, ring, pinky are curled in fist: not (up_middle or up_ring or up_pinky).
+        # Index is extended (ext_index) and not pointing up (not up_index).
+        # Not P shape (middle finger is curled in fist, not extended scissors).
+        # ----------------------------------------------------------------
+        downward_idx_slope = float((lm[8][1] - lm[5][1]) * (-sign_y) / ref_scale)
+        downward_thumb_slope = float((lm[4][1] - lm[2][1]) * (-sign_y) / ref_scale)
+
+        is_dangling_claw = bool(
+            down_middle
+            and down_ring
+            and d_index_middle_tip < 0.15
+            and d_thumb_index_tip > 0.35
+        )
+
+        is_Q_shape = bool(
+            ext_index
+            and straight_idx >= 0.85
+            and not up_index
+            and (downward_idx_slope >= 0.35 or (down_index and not horiz_index))
+            and not (up_middle or up_ring or up_pinky)
+            and not is_dangling_claw
+            and (dot_thumb_index > 0.35 or thumb_index_parallel)
+            and (downward_thumb_slope > -0.15 or is_thumb_pointing_down or is_thumb_horizontal)
+            and d_thumb_index_tip <= 0.70
+            and not is_P_shape
+        )
 
         # ----------------------------------------------------------------
         # LETTER M: 3-finger forward drape (Index, Middle, Ring over thumb)
@@ -410,7 +582,9 @@ class LandmarkNormalizer:
         )
 
         is_M_shape = bool(
-            not (up_index or up_middle or up_ring or up_pinky)
+            not is_Q_shape
+            and not is_P_shape
+            and not (up_index or up_middle or up_ring or up_pinky)
             and not thumb_extended_out
             and not is_O_shape
             and m_pinky_tucked
@@ -439,65 +613,6 @@ class LandmarkNormalizer:
         valid_c_curvature = bool(
             not (up_all_4 and straight_fingers)
             and (are_fingers_arched or horiz_index or horiz_middle or is_hand_horizontal or dx_idx > 0.35 * dy_idx)
-        )
-
-        # ----------------------------------------------------------------
-        # LETTER P: Downward K-shape (Index forward/down, Middle straight down)
-        # Index points forward/horizontally or down; Middle points down.
-        # Index and middle are spread apart like a K/scissors (spread_ratio > 1.80).
-        # Thumb rests near the middle finger joint.
-        # Ring and pinky are folded (not pointing up).
-        # Hand is turned horizontally or pointing down.
-        # ----------------------------------------------------------------
-        d_thumb_mid_pip = float(np.linalg.norm(thumb_tip - lm[10]) / ref_scale)
-        d_thumb_mid_dip = float(np.linalg.norm(thumb_tip - lm[11]) / ref_scale)
-        d_tip_im = float(np.linalg.norm(lm[8][:2] - lm[12][:2]))
-        d_mcp_im = float(np.linalg.norm(lm[5][:2] - lm[9][:2]))
-        p_spread_ratio = float(d_tip_im / (d_mcp_im + 1e-5))
-        downward_mid_slope = float((lm[12][1] - lm[9][1]) * (-sign_y) / ref_scale)
-        is_P_shape = bool(
-            not is_M_shape
-            and ext_index
-            and (down_middle or downward_mid_slope >= 0.35)
-            and not up_middle
-            and not up_ring
-            and not up_pinky
-            and d_index_middle_tip > 0.40
-            and p_spread_ratio >= 1.80
-            and (d_thumb_mid_pip < 0.55 or d_thumb_mid_dip < 0.50 or d_thumb_middle_tip < 0.65)
-        )
-
-        # ----------------------------------------------------------------
-        # LETTER Q: Downward G-shape (Index & thumb pointing downward parallel)
-        # Index points down or diagonally down (downward_idx_slope > 0.05 or down_index).
-        # Thumb points downward/horizontally alongside index.
-        # Thumb and index are parallel (dot_thumb_index > 0.35 or thumb_index_parallel).
-        # Distance between thumb tip and index tip is small (d_thumb_index_tip <= 0.70).
-        # Middle, ring, pinky are curled in fist: not (up_middle or up_ring or up_pinky).
-        # Index is extended (ext_index) and not pointing up (not up_index).
-        # Not P shape (middle finger is curled in fist, not extended scissors).
-        # ----------------------------------------------------------------
-        downward_idx_slope = float((lm[8][1] - lm[5][1]) * (-sign_y) / ref_scale)
-        downward_thumb_slope = float((lm[4][1] - lm[2][1]) * (-sign_y) / ref_scale)
-
-        is_dangling_claw = bool(
-            down_middle
-            and down_ring
-            and d_index_middle_tip < 0.15
-            and d_thumb_index_tip > 0.35
-        )
-
-        is_Q_shape = bool(
-            not is_M_shape
-            and ext_index
-            and not up_index
-            and (downward_idx_slope >= 0.35 or (down_index and not horiz_index))
-            and not (up_middle or up_ring or up_pinky)
-            and not is_dangling_claw
-            and (dot_thumb_index > 0.35 or thumb_index_parallel)
-            and (downward_thumb_slope > -0.15 or is_thumb_pointing_down or is_thumb_horizontal)
-            and d_thumb_index_tip <= 0.70
-            and not is_P_shape
         )
 
         is_C_shape = bool(
@@ -539,6 +654,8 @@ class LandmarkNormalizer:
                 and not is_M_shape
                 and not is_P_shape
                 and not is_Q_shape
+                and not is_X_shape
+                and not index_hooked
                 and (
                     # 4 fingers pointing down together (random dangling hand / open claw)
                     (down_index and down_middle and down_ring and down_pinky)
@@ -616,8 +733,11 @@ class LandmarkNormalizer:
         # Real upright pinky (cannot be a curled pinky inside horizontal fist)
         real_pnk_up = bool(up_pinky and straight_pnk > 0.80 and not is_hand_horizontal)
 
+        # In ASL G: Index extended horizontally, thumb parallel, pinky must be curled into fist
         is_G_shape = bool(
             ext_index
+            and straight_idx >= 0.80
+            and not (ext_pinky and straight_pnk > 0.80)
             and not (up_middle or up_ring or real_pnk_up)
             and not (ext_middle and (horiz_middle or d_index_middle_tip < 0.35))
             and not (is_Q_shape or is_hand_pointing_down or (down_index and not horiz_index and not is_hand_horizontal))
@@ -635,39 +755,60 @@ class LandmarkNormalizer:
         )
 
         # ----------------------------------------------------------------
-        # PINKY TILT
+        # PINKY TILT & ORIENTATION (For I vs J)
         # ----------------------------------------------------------------
         v_pinky_vec = lm[20] - wrist
         is_pinky_tilted = bool(abs(v_pinky_vec[0]) > 0.35 * abs(v_pinky_vec[1]))
         is_hand_tilted = bool(abs(v_long[0]) > 0.35 * abs(v_long[1]))
 
-        # ----------------------------------------------------------------
-        # LETTER J: Pinky extended horizontally/tilted or curved, other fingers curled
-        # In ASL fingerspelling, J ends in (or is formed by) extending the pinky
-        # pointing sideways/horizontally or tilted with a hook, while index, middle,
-        # ring are closed in a fist and thumb is tucked against the fingers.
-        # Not 'I': in 'I', the pinky points strictly UP (vertical).
-        # Not 'Y': in 'Y', the thumb extends outwards.
-        # Not 'G': in 'G', the index is extended, pinky is curled.
-        # ----------------------------------------------------------------
         dx_pnk_tip_mcp = abs(lm[20][0] - lm[17][0])
         dy_pnk_tip_mcp = abs(lm[20][1] - lm[17][1])
-        is_pnk_sideways = bool(
-            horiz_pinky
-            or is_hand_horizontal
-            or is_hand_tilted
-            or is_pinky_tilted
-            or (dx_pnk_tip_mcp > 0.65 * dy_pnk_tip_mcp)
+
+        # Fingers 1-3 curled in fist (not extended straight)
+        fingers_123_curled = bool(
+            (not ext_index or straight_idx < 0.80)
+            and (not ext_middle or straight_mid < 0.80)
+            and (not ext_ring or straight_rng < 0.80)
+            and not (up_index or up_middle or up_ring)
         )
+
+        # In ASL I: Pinky points strictly UP (vertical) on an upright hand
+        is_pinky_vertical_up = bool(
+            up_pinky
+            and dy_pnk_tip_mcp > 1.20 * dx_pnk_tip_mcp
+            and not horiz_pinky
+            and not is_hand_horizontal
+        )
+
+        # In ASL J: Pinky points SIDEWAYS / HORIZONTALLY or tilted in J pose
+        is_pinky_sideways_j = bool(
+            (horiz_pinky or dx_pnk_tip_mcp > 0.65 * dy_pnk_tip_mcp or is_pinky_tilted or is_hand_horizontal)
+            and not is_pinky_vertical_up
+        )
+
+        # ----------------------------------------------------------------
+        # LETTER J: Pinky extended sideways/horizontally, other fingers curled in fist
+        # ----------------------------------------------------------------
         is_J_shape = bool(
             ext_pinky
             and straight_pnk >= 0.80
-            and not (ext_index or ext_middle or ext_ring)
-            and not (up_index or up_middle or up_ring)
+            and fingers_123_curled
             and not thumb_extended_out
             and not is_G_shape
-            and is_pnk_sideways
-            and not (up_pinky and dy_pnk_tip_mcp > 1.25 * dx_pnk_tip_mcp and not is_hand_horizontal and not is_hand_tilted)
+            and is_pinky_sideways_j
+        )
+
+        # ----------------------------------------------------------------
+        # LETTER I: Pinky extended vertically UP, other fingers curled in fist
+        # ----------------------------------------------------------------
+        is_I_shape = bool(
+            ext_pinky
+            and straight_pnk >= 0.80
+            and fingers_123_curled
+            and not thumb_extended_out
+            and not is_G_shape
+            and not is_J_shape
+            and is_pinky_vertical_up
         )
 
         # ----------------------------------------------------------------
@@ -695,6 +836,19 @@ class LandmarkNormalizer:
         )
 
         # LETTER S: Closed fist with thumb wrapped HORIZONTALLY across front of fingers
+        # Canonical 3D alignment for rotation-invariant analysis
+        canonical_lm, R_canonical = self.canonical_align(lm, handedness=handedness)
+
+        # In canonical space, X is the transverse axis (Index MCP > 0, Middle MCP = 0, Pinky MCP < 0).
+        # t_pip_canonical measures where thumb tip sits: 0.0 at Index PIP, 1.0 at Middle PIP.
+        idx_pip_x = float(canonical_lm[6][0])
+        mid_pip_x = float(canonical_lm[10][0])
+        pip_span_c = idx_pip_x - mid_pip_x
+        t_pip_canonical = float((idx_pip_x - canonical_lm[4][0]) / (pip_span_c + 1e-5))
+        d_ti_pip_c = float(np.linalg.norm(canonical_lm[4] - canonical_lm[6]))
+        d_tm_pip_c = float(np.linalg.norm(canonical_lm[4] - canonical_lm[10]))
+
+        # LETTER S: Closed fist with thumb wrapped HORIZONTALLY across front of fingers
         is_S_shape = bool(
             all_fingers_curled
             and 0.14 <= t_thumb <= 0.45
@@ -704,12 +858,23 @@ class LandmarkNormalizer:
         )
 
         # LETTER T: Closed fist with thumb tip poked UP between index and middle fingers
-        is_T_shape = bool(
+        is_T_canonical = bool(
             all_fingers_curled
-            and 0.10 <= t_thumb <= 0.35
-            and is_thumb_distal_pointing_up
-            and not is_thumb_distal_horizontal
+            and 0.12 <= t_pip_canonical <= 0.88
+            and min(d_ti_pip_c, d_tm_pip_c) < 0.35
+            and canonical_lm[4][1] >= canonical_lm[5][1] - 0.15
             and not is_S_shape
+        )
+
+        is_T_shape = bool(
+            is_T_canonical
+            or (
+                all_fingers_curled
+                and 0.10 <= t_thumb <= 0.35
+                and is_thumb_distal_pointing_up
+                and not is_thumb_distal_horizontal
+                and not is_S_shape
+            )
         )
 
         # LETTER E: Curled fist with thumb tucked underneath fingertips across palm
@@ -725,9 +890,6 @@ class LandmarkNormalizer:
                 or (h_thumb <= -0.32 and t_thumb >= 0.50)
             )
         )
-
-        # Canonical 3D alignment for rotation-invariant analysis
-        canonical_lm, R_canonical = self.canonical_align(lm, handedness=handedness)
 
         return {
             # Canonical 3D representations
@@ -771,6 +933,10 @@ class LandmarkNormalizer:
             "dot_thumb_index": dot_thumb_index,
             # Complex shape detectors
             "are_index_middle_crossed": are_index_middle_crossed,
+            "is_R_shape": is_R_shape,
+            "is_U_shape": is_U_shape,
+            "is_V_shape": is_V_shape,
+            "u_v_spread_ratio": u_v_spread_ratio,
             "index_hooked": index_hooked,
             "is_O_shape": is_O_shape,
             "is_C_shape": is_C_shape,
@@ -784,10 +950,13 @@ class LandmarkNormalizer:
             "idx_tip_elevation": idx_tip_elevation,
             "d_index_tip_mcp": d_index_tip_mcp,
             "is_G_shape": is_G_shape,
+            "is_I_shape": is_I_shape,
             "is_J_shape": is_J_shape,
             "is_L_shape": is_L_shape,
             "is_M_shape": is_M_shape,
             "is_N_shape": is_N_shape,
+            "is_X_shape": is_X_shape,
+            "index_hooked": index_hooked,
             "is_P_shape": is_P_shape,
             "p_spread_ratio": p_spread_ratio,
             "downward_mid_slope": downward_mid_slope,
@@ -796,6 +965,7 @@ class LandmarkNormalizer:
             "downward_thumb_slope": downward_thumb_slope,
             "is_S_shape": is_S_shape,
             "is_T_shape": is_T_shape,
+            "t_pip_canonical": t_pip_canonical,
             "is_E_shape": is_E_shape,
             "is_thumb_distal_horizontal": is_thumb_distal_horizontal,
             "is_thumb_distal_pointing_up": is_thumb_distal_pointing_up,

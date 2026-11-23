@@ -21,10 +21,12 @@ from src.classifier import GestureClassifier
 from src.filters import (
     ExponentialMovingAverage,
     GestureDebouncer,
+    HandMotionDetector,
     OneEuroFilter,
     StrokeTrajectoryTracker,
     WordPredictor,
 )
+from src.gesture_event_manager import EventType, GestureEventManager, SystemState
 from src.lstm_recognizer import LSTMRecurrentClassifier
 from src.normalizer import LandmarkNormalizer
 from src.tracker import HandData, HandTracker
@@ -60,6 +62,85 @@ def test_debouncer_stabilization():
 
     state, _ = debouncer.update("A", 0.9)
     assert state == "B"
+
+
+def test_hand_motion_detector_and_steady_gate():
+    """
+    Verifies that HandMotionDetector detects hand motion, suppresses letters during movement,
+    and unlocks detection once the hand gesture is held steady.
+    """
+    detector = HandMotionDetector(motion_threshold=0.07, min_steady_frames=3, window_size=5)
+    debouncer = GestureDebouncer(consecutive_frames=3, history_length=8)
+    event_manager = GestureEventManager(hold_frames=3, confirm_hold_frames=3, min_confidence=0.92)
+
+    # Base hand landmarks (wrist at (0.5, 0.7), middle MCP 9 at (0.5, 0.55), scale ~0.15)
+    base_lm = np.array([[0.5, 0.7, 0.0] for _ in range(21)], dtype=np.float32)
+    base_lm[9] = [0.5, 0.55, 0.0]
+    ref_scale = 0.15
+
+    # 1. Moving hand: translating across frame (step = 0.02 per frame -> motion ~0.133 > 0.07)
+    for i in range(5):
+        moving_lm = base_lm.copy()
+        moving_lm[:, :2] += np.array([i * 0.02, i * 0.015], dtype=np.float32)
+        is_steady, motion = detector.update(moving_lm, ref_scale=ref_scale)
+        assert is_steady is False, f"Expected moving on frame {i}, got is_steady={is_steady}"
+
+        # Gate suppresses debouncer
+        active_letter, active_conf = debouncer.update("None", 0.0)
+        assert active_letter == "None"
+
+        # Gate suppresses event manager hold accumulation
+        event = event_manager.process_frame(
+            raw_letter="A",
+            confidence=0.96,
+            landmarks=moving_lm,
+            debug_info={"ref_scale": ref_scale},
+            is_steady=is_steady,
+        )
+        assert event.event_type == EventType.NONE
+        assert event_manager.candidate_hold_count == 0
+
+    # 2. Hand settles and holds still (sub-millimeter tremor ~0.0005 per frame -> motion ~0.003 < 0.07)
+    stationary_lm = moving_lm.copy()
+    steady_detected = False
+    for frame_idx in range(12):
+        jitter_lm = stationary_lm + np.random.uniform(-0.0005, 0.0005, (21, 3)).astype(np.float32)
+        is_steady, motion = detector.update(jitter_lm, ref_scale=ref_scale)
+
+        if is_steady:
+            steady_detected = True
+            active_letter, active_conf = debouncer.update("A", 0.96)
+            event = event_manager.process_frame(
+                raw_letter=active_letter,
+                confidence=active_conf,
+                landmarks=jitter_lm,
+                debug_info={"ref_scale": ref_scale},
+                is_steady=is_steady,
+            )
+        else:
+            active_letter, active_conf = debouncer.update("None", 0.0)
+
+    assert steady_detected is True, "HandMotionDetector failed to detect steady state after settling"
+    assert active_letter == "A", f"Expected active letter 'A' once steady, got {active_letter}"
+
+    # 3. Reset when hand is removed
+    detector.reset()
+    assert detector.is_steady is False
+    assert detector.prev_landmarks is None
+
+    # 4. Finger morphing / folding detection (wrist still, index & middle folding down)
+    detector_morph = HandMotionDetector(motion_threshold=0.040, min_steady_frames=6, window_size=7)
+    for _ in range(8):
+        detector_morph.update(base_lm, ref_scale=ref_scale)
+    assert detector_morph.is_steady is True, "Should be steady while resting"
+
+    # Now fold fingers (e.g., transition from U to N)
+    for i in range(5):
+        morphed_lm = base_lm.copy()
+        morphed_lm[8, 1] += (i + 1) * 0.015
+        morphed_lm[12, 1] += (i + 1) * 0.015
+        is_steady, motion = detector_morph.update(morphed_lm, ref_scale=ref_scale)
+        assert is_steady is False, f"Expected is_steady=False during finger morphing frame {i}"
 
 
 def test_visualizer_rendering():
@@ -1031,7 +1112,46 @@ def test_strict_q_gesture():
     assert res_qur == "Q", f"Right hand uploaded Q should classify as Q, got {res_qur}"
     assert conf_qur >= 0.95
 
-    # 4. Flat open palm must NOT classify as Q
+    # 4. User Q from uploaded image (media_1794485506664_94a66ccf.png & media_1794485509933_def56660.jpg)
+    w_new, h_new = 890.0, 606.0
+    user_q_new = np.zeros((21, 3), dtype=np.float32)
+    user_q_new[0]  = [666.9 / w_new, 380.3 / h_new, 0.0]
+    user_q_new[1]  = [519.6 / w_new, 386.3 / h_new, 0.0]
+    user_q_new[2]  = [391.9 / w_new, 346.8 / h_new, 0.0]
+    user_q_new[3]  = [303.2 / w_new, 346.2 / h_new, 0.0]
+    user_q_new[4]  = [237.8 / w_new, 340.6 / h_new, 0.0]
+    user_q_new[5]  = [422.5 / w_new, 155.3 / h_new, 0.0]
+    user_q_new[6]  = [296.8 / w_new, 224.8 / h_new, 0.0]
+    user_q_new[7]  = [221.2 / w_new, 300.0 / h_new, 0.0]
+    user_q_new[8]  = [165.8 / w_new, 366.6 / h_new, 0.0]
+    user_q_new[9]  = [442.4 / w_new, 141.2 / h_new, 0.0]
+    user_q_new[10] = [314.1 / w_new, 231.1 / h_new, 0.0]
+    user_q_new[11] = [239.2 / w_new, 303.1 / h_new, 0.0]
+    user_q_new[12] = [188.9 / w_new, 366.8 / h_new, 0.0]
+    user_q_new[13] = [462.5 / w_new, 153.3 / h_new, 0.0]
+    user_q_new[14] = [349.9 / w_new, 254.1 / h_new, 0.0]
+    user_q_new[15] = [289.4 / w_new, 300.3 / h_new, 0.0]
+    user_q_new[16] = [188.9 / w_new, 366.8 / h_new, 0.0]
+    user_q_new[17] = [474.1 / w_new, 192.2 / h_new, 0.0]
+    user_q_new[18] = [385.4 / w_new, 346.2 / h_new, 0.0]
+    user_q_new[19] = [303.3 / w_new, 341.0 / h_new, 0.0]
+    user_q_new[20] = [188.9 / w_new, 366.8 / h_new, 0.0]
+
+    res_qn_l, conf_qn_l = classifier.classify(user_q_new, handedness="Left")
+    assert res_qn_l == "Q", f"User Q new (Left) should classify as Q, got {res_qn_l}"
+    assert conf_qn_l >= 0.95
+
+    res_qn_h, conf_qn_h = clf_hybrid.classify(user_q_new, handedness="Left")
+    assert res_qn_h == "Q", f"User Q new hybrid (Left) should classify as Q, got {res_qn_h}"
+    assert conf_qn_h >= 0.95
+
+    user_qn_r = np.copy(user_q_new)
+    user_qn_r[:, 0] = 1.0 - user_qn_r[:, 0]
+    res_qn_r, conf_qn_r = classifier.classify(user_qn_r, handedness="Right")
+    assert res_qn_r == "Q", f"User Q new (Right) should classify as Q, got {res_qn_r}"
+    assert conf_qn_r >= 0.95
+
+    # 5. Flat open palm must NOT classify as Q
     open_palm = np.zeros((21, 3), dtype=np.float32)
     open_palm[0] = [0, 0, 0]
     open_palm[5] = [0.15, -0.5, 0.0]
@@ -1042,6 +1162,84 @@ def test_strict_q_gesture():
     open_palm[4] = [0.65, -0.45, 0.0]
     res_op, _ = classifier.classify(open_palm)
     assert res_op != "Q", f"Open palm should not be Q, got {res_op}"
+
+
+def test_strict_r_gesture():
+    """Verifies that crossed index and middle fingers detect R, distinguishing R from U, V, K, H, B, and open palm."""
+    classifier = GestureClassifier(mode="heuristic")
+    clf_hybrid = GestureClassifier(mode="hybrid")
+
+    # 1. User uploaded R gesture (media_1794632875900_b0f54415.png)
+    w, h = 371.0, 601.0
+    user_r = np.zeros((21, 3), dtype=np.float32)
+    user_r[0] = [130.0 / w, 529.7 / h, 0.0]
+    user_r[1] = [218.9 / w, 471.6 / h, -0.02]
+    user_r[2] = [262.4 / w, 365.5 / h, -0.04]
+    user_r[3] = [215.0 / w, 280.0 / h, -0.05]
+    user_r[4] = [167.8 / w, 201.4 / h, -0.06]
+
+    user_r[5] = [225.6 / w, 272.9 / h, -0.01]
+    user_r[6] = [214.1 / w, 182.0 / h, -0.02]
+    user_r[7] = [187.3 / w, 110.5 / h, -0.03]
+    user_r[8] = [157.1 / w, 48.4 / h, -0.04]
+
+    user_r[9] = [163.9 / w, 270.9 / h, 0.0]
+    user_r[10] = [183.8 / w, 152.9 / h, 0.01]
+    user_r[11] = [215.6 / w, 86.7 / h, 0.02]
+    user_r[12] = [235.3 / w, 29.2 / h, 0.03]
+
+    user_r[13] = [110.5 / w, 292.1 / h, 0.0]
+    user_r[14] = [119.7 / w, 194.0 / h, 0.01]
+    user_r[15] = [127.2 / w, 303.0 / h, 0.02]
+    user_r[16] = [179.6 / w, 332.3 / h, 0.03]
+
+    user_r[17] = [54.9 / w, 325.6 / h, 0.0]
+    user_r[18] = [83.6 / w, 252.0 / h, 0.01]
+    user_r[19] = [110.0 / w, 310.0 / h, 0.02]
+    user_r[20] = [143.3 / w, 356.8 / h, 0.03]
+
+    res_rl, conf_rl = classifier.classify(user_r, handedness="Left")
+    assert res_rl == "R", f"User R (Left) should classify as R, got {res_rl}"
+    assert conf_rl >= 0.95
+
+    res_rl_h, conf_rl_h = clf_hybrid.classify(user_r, handedness="Left")
+    assert res_rl_h == "R", f"User R (Left hybrid) should classify as R, got {res_rl_h}"
+    assert conf_rl_h >= 0.95
+
+    # Right hand parity
+    user_r_right = np.copy(user_r)
+    user_r_right[:, 0] = 1.0 - user_r_right[:, 0]
+    res_rr, conf_rr = classifier.classify(user_r_right, handedness="Right")
+    assert res_rr == "R", f"User R (Right) should classify as R, got {res_rr}"
+    assert conf_rr >= 0.95
+
+    res_rr_h, conf_rr_h = clf_hybrid.classify(user_r_right, handedness="Right")
+    assert res_rr_h == "R", f"User R (Right hybrid) should classify as R, got {res_rr_h}"
+    assert conf_rr_h >= 0.95
+
+    # 2. Distinguish from U, V, K, H, B (they must NOT classify as R)
+    from data.train_model import create_base_skeleton
+    for other in ["U", "V", "K", "H", "B"]:
+        skel = create_base_skeleton(other)
+        pred, _ = classifier.classify(skel, handedness="Right")
+        assert pred != "R", f"{other} should not classify as R, got {pred}"
+        pred_h, _ = clf_hybrid.classify(skel, handedness="Right")
+        assert pred_h != "R", f"{other} (hybrid) should not classify as R, got {pred_h}"
+
+    # 3. Flat open palm must not classify as R
+    open_palm = np.zeros((21, 3), dtype=np.float32)
+    open_palm[0] = [0, 0, 0]
+    open_palm[5] = [0.15, 0.5, 0.0]
+    open_palm[8] = [0.25, 0.95, 0.0]
+    open_palm[9] = [0.0, 0.52, 0.0]
+    open_palm[12] = [0.0, 0.98, 0.0]
+    open_palm[13] = [-0.15, 0.5, 0.0]
+    open_palm[16] = [-0.25, 0.95, 0.0]
+    open_palm[17] = [-0.30, 0.45, 0.0]
+    open_palm[20] = [-0.40, 0.90, 0.0]
+    open_palm[4] = [0.65, 0.45, 0.0]
+    res_op, _ = classifier.classify(open_palm)
+    assert res_op != "R", f"Open palm should not be R, got {res_op}"
 
 
 def test_one_euro_filter():
@@ -1204,6 +1402,38 @@ def test_dynamic_j_and_z_strokes():
             z_detected = res
     assert z_detected is not None and z_detected[0] == "Z", f"Expected Z stroke, got {z_detected}"
 
+    # 4. Circular motion Z stroke with extended index finger (clockwise)
+    tracker.reset()
+    circle_z_detected = None
+    for t in range(20):
+        frame_lm = base_d.copy()
+        angle = 2.0 * np.pi * (t / 19.0)
+        frame_lm[8, 0] += 0.08 * np.cos(angle)
+        frame_lm[8, 1] += 0.08 * np.sin(angle)
+        m = normalizer.analyze_hand(frame_lm, "Right")
+        res = tracker.update(frame_lm, m)
+        if res:
+            circle_z_detected = res
+            pred, conf = classifier.classify(frame_lm, handedness="Right", dynamic_gesture=res[0], precomputed_m=m)
+            assert pred == "Z" and conf >= 0.95, f"Classifier must return Z on dynamic circle stroke, got {pred}"
+    assert circle_z_detected is not None and circle_z_detected[0] == "Z", f"Expected circular Z stroke, got {circle_z_detected}"
+
+    # 5. Counter-clockwise circular motion Z stroke
+    tracker.reset()
+    ccw_z_detected = None
+    for t in range(20):
+        frame_lm = base_d.copy()
+        angle = -2.0 * np.pi * (t / 19.0)
+        frame_lm[8, 0] += 0.08 * np.cos(angle)
+        frame_lm[8, 1] += 0.08 * np.sin(angle)
+        m = normalizer.analyze_hand(frame_lm, "Right")
+        res = tracker.update(frame_lm, m)
+        if res:
+            ccw_z_detected = res
+            pred, conf = classifier.classify(frame_lm, handedness="Right", dynamic_gesture=res[0], precomputed_m=m)
+            assert pred == "Z" and conf >= 0.95
+    assert ccw_z_detected is not None and ccw_z_detected[0] == "Z", f"Expected CCW circular Z stroke, got {ccw_z_detected}"
+
 
 def test_unknown_gesture_rejection():
     """Verifies that invalid or ambiguous hand shapes do not produce false alphabet predictions."""
@@ -1365,6 +1595,73 @@ def test_strict_i_vs_j_distinction():
     # Image 2 must never classify as I
     assert p2_l != "I" and p2_r != "I", "J gesture must never classify as I"
 
+    # 4. Latest User Image 1 (media_1794559828895_162f4e66.jpg - ASL I)
+    w_new1, h_new1 = 496.0, 618.0
+    user_i_new = np.zeros((21, 3), dtype=np.float32)
+    user_i_new[0]  = [264.6 / w_new1, 494.7 / h_new1, 0.0]
+    user_i_new[1]  = [177.9 / w_new1, 450.4 / h_new1, 0.0]
+    user_i_new[2]  = [125.0 / w_new1, 355.5 / h_new1, 0.0]
+    user_i_new[3]  = [149.5 / w_new1, 270.1 / h_new1, 0.0]
+    user_i_new[4]  = [217.4 / w_new1, 268.0 / h_new1, 0.0]
+    user_i_new[5]  = [126.9 / w_new1, 251.4 / h_new1, 0.0]
+    user_i_new[6]  = [110.0 / w_new1, 200.0 / h_new1, 0.0]
+    user_i_new[7]  = [118.2 / w_new1, 273.1 / h_new1, 0.0]
+    user_i_new[8]  = [137.9 / w_new1, 237.9 / h_new1, 0.0]
+    user_i_new[9]  = [184.3 / w_new1, 262.7 / h_new1, 0.0]
+    user_i_new[10] = [175.0 / w_new1, 200.0 / h_new1, 0.0]
+    user_i_new[11] = [175.0 / w_new1, 250.0 / h_new1, 0.0]
+    user_i_new[12] = [187.9 / w_new1, 240.2 / h_new1, 0.0]
+    user_i_new[13] = [245.9 / w_new1, 264.3 / h_new1, 0.0]
+    user_i_new[14] = [240.0 / w_new1, 200.0 / h_new1, 0.0]
+    user_i_new[15] = [230.4 / w_new1, 275.5 / h_new1, 0.0]
+    user_i_new[16] = [204.6 / w_new1, 196.2 / h_new1, 0.0]
+    user_i_new[17] = [307.3 / w_new1, 270.4 / h_new1, 0.0]
+    user_i_new[18] = [314.3 / w_new1, 154.5 / h_new1, 0.0]
+    user_i_new[19] = [320.0 / w_new1, 110.0 / h_new1, 0.0]
+    user_i_new[20] = [320.6 / w_new1, 68.4 / h_new1, 0.0]
+
+    p_in_l, c_in_l = classifier.classify(user_i_new, handedness="Left")
+    assert p_in_l == "I" and c_in_l >= 0.92, f"Latest User Image 1 should classify as I, got {p_in_l}"
+
+    user_i_new_r = np.copy(user_i_new)
+    user_i_new_r[:, 0] = 1.0 - user_i_new_r[:, 0]
+    p_in_r, c_in_r = classifier.classify(user_i_new_r, handedness="Right")
+    assert p_in_r == "I" and c_in_r >= 0.92, f"Latest User Image 1 right parity should classify as I, got {p_in_r}"
+
+    # 5. Latest User Image 2 (media_1794559841102_6b951183.jpg - ASL J)
+    w_new2, h_new2 = 715.0, 481.0
+    user_j_new = np.zeros((21, 3), dtype=np.float32)
+    user_j_new[0]  = [568.5 / w_new2, 442.3 / h_new2, 0.0]
+    user_j_new[1]  = [552.6 / w_new2, 288.6 / h_new2, 0.0]
+    user_j_new[2]  = [506.1 / w_new2, 197.4 / h_new2, 0.0]
+    user_j_new[3]  = [383.9 / w_new2, 216.6 / h_new2, 0.0]
+    user_j_new[4]  = [284.5 / w_new2, 241.2 / h_new2, 0.0]
+    user_j_new[5]  = [465.9 / w_new2, 107.6 / h_new2, 0.0]
+    user_j_new[6]  = [310.8 / w_new2, 88.5 / h_new2, 0.0]
+    user_j_new[7]  = [317.0 / w_new2, 135.3 / h_new2, 0.0]
+    user_j_new[8]  = [318.9 / w_new2, 210.8 / h_new2, 0.0]
+    user_j_new[9]  = [426.7 / w_new2, 154.5 / h_new2, 0.0]
+    user_j_new[10] = [360.0 / w_new2, 120.0 / h_new2, 0.0]
+    user_j_new[11] = [355.0 / w_new2, 150.0 / h_new2, 0.0]
+    user_j_new[12] = [352.5 / w_new2, 160.0 / h_new2, 0.0]
+    user_j_new[13] = [383.5 / w_new2, 222.0 / h_new2, 0.0]
+    user_j_new[14] = [370.0 / w_new2, 150.0 / h_new2, 0.0]
+    user_j_new[15] = [365.0 / w_new2, 160.0 / h_new2, 0.0]
+    user_j_new[16] = [366.5 / w_new2, 152.8 / h_new2, 0.0]
+    user_j_new[17] = [342.7 / w_new2, 292.3 / h_new2, 0.0]
+    user_j_new[18] = [245.8 / w_new2, 220.7 / h_new2, 0.0]
+    user_j_new[19] = [149.4 / w_new2, 204.2 / h_new2, 0.0]
+    user_j_new[20] = [98.6 / w_new2, 179.1 / h_new2, 0.0]
+
+    p_jn_l, c_jn_l = classifier.classify(user_j_new, handedness="Left")
+    assert p_jn_l == "J" and c_jn_l >= 0.92, f"Latest User Image 2 should classify as J, got {p_jn_l}"
+
+    user_j_new_r = np.copy(user_j_new)
+    user_j_new_r[:, 0] = 1.0 - user_j_new_r[:, 0]
+    p_jn_r, c_jn_r = classifier.classify(user_j_new_r, handedness="Right")
+    assert p_jn_r == "J" and c_jn_r >= 0.92, f"Latest User Image 2 right parity should classify as J, got {p_jn_r}"
+    assert p_jn_l != "I" and p_jn_r != "I", "Latest J gesture must never classify as I"
+
 
 def test_strict_s_vs_t_gesture():
     """Verifies that ASL 'S' and 'T' are correctly distinguished and never confused across left/right hands."""
@@ -1414,6 +1711,183 @@ def test_strict_s_vs_t_gesture():
     assert p_usr == "S" and c_usr >= 0.92, f"User S image (Right hand) should classify as S, got {p_usr} ({c_usr})"
     assert p_usr != "T", "User S image (Right hand) must NEVER classify as T"
 
+    # 4. User T image landmarks (media_1795414443135_8c114941.jpg)
+    w_t, h_t = 610.0, 547.0
+    pts_user_t = np.zeros((21, 3), dtype=np.float32)
+    pts_user_t[0] = [335.4 / w_t, 506.1 / h_t, 0.0]
+    pts_user_t[1] = [222.9 / w_t, 448.0 / h_t, -0.02]; pts_user_t[2] = [142.0 / w_t, 307.9 / h_t, -0.04]; pts_user_t[3] = [148.0 / w_t, 185.0 / h_t, -0.05]; pts_user_t[4] = [151.0 / w_t, 67.2 / h_t, -0.08]
+    pts_user_t[5] = [147.9 / w_t, 178.6 / h_t, 0.0]; pts_user_t[6] = [83.6 / w_t, 82.3 / h_t, -0.03]; pts_user_t[7] = [82.2 / w_t, 220.2 / h_t, -0.04]; pts_user_t[8] = [106.1 / w_t, 244.6 / h_t, -0.05]
+    pts_user_t[9] = [248.3 / w_t, 182.9 / h_t, 0.0]; pts_user_t[10] = [199.0 / w_t, 90.6 / h_t, -0.03]; pts_user_t[11] = [197.6 / w_t, 226.6 / h_t, -0.04]; pts_user_t[12] = [221.2 / w_t, 252.9 / h_t, -0.05]
+    pts_user_t[13] = [345.6 / w_t, 201.7 / h_t, 0.0]; pts_user_t[14] = [301.0 / w_t, 141.7 / h_t, -0.03]; pts_user_t[15] = [286.0 / w_t, 273.7 / h_t, -0.04]; pts_user_t[16] = [305.3 / w_t, 290.4 / h_t, -0.05]
+    pts_user_t[17] = [440.2 / w_t, 233.7 / h_t, 0.0]; pts_user_t[18] = [383.4 / w_t, 191.2 / h_t, -0.03]; pts_user_t[19] = [364.1 / w_t, 276.7 / h_t, -0.04]; pts_user_t[20] = [384.9 / w_t, 291.6 / h_t, -0.05]
+
+    p_ut, c_ut = classifier.classify(pts_user_t, handedness="Left")
+    assert p_ut == "T" and c_ut >= 0.92, f"User T image should classify as T, got {p_ut} ({c_ut})"
+    assert p_ut != "A", "User T image must NEVER classify as A"
+    assert p_ut != "S", "User T image must NEVER classify as S"
+
+    # Right hand parity for user T image
+    pts_user_t_r = pts_user_t.copy()
+    pts_user_t_r[:, 0] = 1.0 - pts_user_t_r[:, 0]
+    p_utr, c_utr = classifier.classify(pts_user_t_r, handedness="Right")
+    assert p_utr == "T" and c_utr >= 0.92, f"User T image (Right hand) should classify as T, got {p_utr} ({c_utr})"
+    assert p_utr != "A", "User T image (Right hand) must NEVER classify as A"
+    assert p_utr != "S", "User T image (Right hand) must NEVER classify as S"
+
+
+def test_strict_u_vs_v_gesture():
+    """Verifies that ASL 'U' and 'V' are correctly distinguished and never confused across left/right hands."""
+    from data.train_model import create_base_skeleton
+    classifier = GestureClassifier()
+
+    # 1. Base U skeleton
+    base_u = create_base_skeleton("U")
+    pred_u, conf_u = classifier.classify(base_u, handedness="Right")
+    assert pred_u == "U" and conf_u >= 0.92, f"Base U should classify as U, got {pred_u} ({conf_u})"
+
+    # Left-hand parity for base U
+    base_u_l = base_u.copy()
+    base_u_l[:, 0] = -base_u_l[:, 0]
+    pred_ul, conf_ul = classifier.classify(base_u_l, handedness="Left")
+    assert pred_ul == "U" and conf_ul >= 0.92, f"Left base U should classify as U, got {pred_ul} ({conf_ul})"
+
+    # 2. Base V skeleton
+    base_v = create_base_skeleton("V")
+    pred_v, conf_v = classifier.classify(base_v, handedness="Right")
+    assert pred_v == "V" and conf_v >= 0.92, f"Base V should classify as V, got {pred_v} ({conf_v})"
+
+    # Left-hand parity for base V
+    base_v_l = base_v.copy()
+    base_v_l[:, 0] = -base_v_l[:, 0]
+    pred_vl, conf_vl = classifier.classify(base_v_l, handedness="Left")
+    assert pred_vl == "V" and conf_vl >= 0.92, f"Left base V should classify as V, got {pred_vl} ({conf_vl})"
+
+    # 3. User U image landmarks (media_1795415993378_51ddc483.jpg)
+    w_u, h_u = 326.0, 657.0
+    pts_user_u = np.zeros((21, 3), dtype=np.float32)
+    pts_user_u[0] = [197.1 / w_u, 578.3 / h_u, 0.0]
+    pts_user_u[1] = [128.0 / w_u, 527.3 / h_u, -0.02]; pts_user_u[2] = [95.1 / w_u, 438.1 / h_u, -0.04]; pts_user_u[3] = [135.6 / w_u, 355.9 / h_u, -0.05]; pts_user_u[4] = [187.9 / w_u, 303.4 / h_u, -0.07]
+    pts_user_u[5] = [60.6 / w_u, 317.2 / h_u, 0.0]; pts_user_u[6] = [55.9 / w_u, 205.5 / h_u, -0.03]; pts_user_u[7] = [57.5 / w_u, 137.9 / h_u, -0.04]; pts_user_u[8] = [59.0 / w_u, 81.7 / h_u, -0.05]
+    pts_user_u[9] = [129.7 / w_u, 309.7 / h_u, 0.0]; pts_user_u[10] = [115.8 / w_u, 182.6 / h_u, -0.03]; pts_user_u[11] = [111.4 / w_u, 107.7 / h_u, -0.04]; pts_user_u[12] = [106.7 / w_u, 41.6 / h_u, -0.05]
+    pts_user_u[13] = [246.5 / w_u, 317.3 / h_u, 0.0]; pts_user_u[14] = [197.0 / w_u, 331.0 / h_u, -0.03]; pts_user_u[15] = [186.5 / w_u, 348.6 / h_u, -0.04]; pts_user_u[16] = [174.3 / w_u, 397.0 / h_u, -0.05]
+    pts_user_u[17] = [256.7 / w_u, 366.2 / h_u, 0.0]; pts_user_u[18] = [223.8 / w_u, 367.9 / h_u, -0.03]; pts_user_u[19] = [199.6 / w_u, 274.8 / h_u, -0.04]; pts_user_u[20] = [207.6 / w_u, 404.8 / h_u, -0.05]
+
+    p_uu, c_uu = classifier.classify(pts_user_u, handedness="Left")
+    assert p_uu == "U" and c_uu >= 0.92, f"User U image should classify as U, got {p_uu} ({c_uu})"
+    assert p_uu != "V", "User U image must NEVER classify as V"
+    assert p_uu != "R", "User U image must NEVER classify as R"
+    assert p_uu != "K", "User U image must NEVER classify as K"
+    assert p_uu != "None", "User U image must not be rejected as None"
+
+    # Right hand parity for user U image
+    pts_user_u_r = pts_user_u.copy()
+    pts_user_u_r[:, 0] = 1.0 - pts_user_u_r[:, 0]
+    p_uur, c_uur = classifier.classify(pts_user_u_r, handedness="Right")
+    assert p_uur == "U" and c_uur >= 0.92, f"User U image (Right hand) should classify as U, got {p_uur} ({c_uur})"
+    assert p_uur != "V", "User U image (Right hand) must NEVER classify as V"
+    assert p_uur != "R", "User U image (Right hand) must NEVER classify as R"
+    assert p_uur != "K", "User U image (Right hand) must NEVER classify as K"
+    assert p_uur != "None", "User U image (Right hand) must not be rejected as None"
+
+    # 4. User U image 2 landmarks (media_1795417498374_16958d73.jpg)
+    pts_user_u2 = np.array([
+        [0.650383, 0.717960, 0.000000],
+        [0.612158, 0.684640, -0.004805],
+        [0.596749, 0.597977, -0.001657],
+        [0.606209, 0.530229, -0.001705],
+        [0.625468, 0.494005, -0.000744],
+        [0.616627, 0.559826, 0.022702],
+        [0.618788, 0.512842, 0.017711],
+        [0.622478, 0.480959, 0.013205],
+        [0.624880, 0.463651, 0.010398],
+        [0.640399, 0.559077, 0.019861],
+        [0.638972, 0.502263, 0.010589],
+        [0.639622, 0.473819, 0.003306],
+        [0.637761, 0.459068, 0.000431],
+        [0.663250, 0.564983, 0.013333],
+        [0.655313, 0.515584, -0.005981],
+        [0.644585, 0.561497, -0.013004],
+        [0.635735, 0.613989, -0.011228],
+        [0.689440, 0.573765, 0.006378],
+        [0.677622, 0.526382, -0.012079],
+        [0.662652, 0.531607, -0.019740],
+        [0.647251, 0.550849, -0.021296],
+    ], dtype=np.float32)
+
+    p_uu2, c_uu2 = classifier.classify(pts_user_u2, handedness="Left")
+    assert p_uu2 == "U" and c_uu2 >= 0.92, f"User U image 2 should classify as U, got {p_uu2} ({c_uu2})"
+    assert p_uu2 != "K", "User U image 2 must NEVER classify as K"
+    assert p_uu2 != "V", "User U image 2 must NEVER classify as V"
+    assert p_uu2 != "R", "User U image 2 must NEVER classify as R"
+    assert p_uu2 != "None", "User U image 2 must not be rejected as None"
+
+    # Right hand parity for user U image 2
+    pts_user_u2_r = pts_user_u2.copy()
+    pts_user_u2_r[:, 0] = 1.0 - pts_user_u2_r[:, 0]
+    p_uu2_r, c_uu2_r = classifier.classify(pts_user_u2_r, handedness="Right")
+    assert p_uu2_r == "U" and c_uu2_r >= 0.92, f"User U image 2 (Right hand) should classify as U, got {p_uu2_r} ({c_uu2_r})"
+    assert p_uu2_r != "K", "User U image 2 (Right hand) must NEVER classify as K"
+    assert p_uu2_r != "V", "User U image 2 (Right hand) must NEVER classify as V"
+    assert p_uu2_r != "R", "User U image 2 (Right hand) must NEVER classify as R"
+    assert p_uu2_r != "None", "User U image 2 (Right hand) must not be rejected as None"
+
+    # Real User U image 3 landmarks (media_1795428461295_bd0f8d04.jpg)
+    pts_user_u3 = np.array([
+        [0.6433, 0.6931, -0.0000],
+        [0.6122, 0.6568, -0.0106],
+        [0.6002, 0.5766, -0.0116],
+        [0.6110, 0.5187, -0.0143],
+        [0.6310, 0.4917, -0.0158],
+        [0.6238, 0.5195,  0.0166],
+        [0.6244, 0.4716,  0.0120],
+        [0.6205, 0.4510,  0.0042],
+        [0.6180, 0.4379, -0.0020],
+        [0.6430, 0.5188,  0.0155],
+        [0.6467, 0.4583,  0.0124],
+        [0.6449, 0.4259,  0.0046],
+        [0.6437, 0.4037, -0.0024],
+        [0.6587, 0.5297,  0.0104],
+        [0.6674, 0.4688,  0.0009],
+        [0.6604, 0.4654, -0.0079],
+        [0.6524, 0.4800, -0.0129],
+        [0.6756, 0.5481,  0.0037],
+        [0.6803, 0.4944, -0.0059],
+        [0.6739, 0.4785, -0.0124],
+        [0.6655, 0.4795, -0.0168],
+    ], dtype=np.float32)
+
+    p_uu3, c_uu3 = classifier.classify(pts_user_u3, handedness="Left")
+    assert p_uu3 == "U" and c_uu3 >= 0.92, f"User U image 3 should classify as U, got {p_uu3} ({c_uu3})"
+    assert p_uu3 != "K", "User U image 3 must NEVER classify as K"
+    assert p_uu3 != "H", "User U image 3 must NEVER classify as H"
+    assert p_uu3 != "N", "User U image 3 must NEVER classify as N"
+    assert p_uu3 != "None", "User U image 3 must not be rejected as None"
+
+    # Right hand parity for user U image 3
+    pts_user_u3_r = pts_user_u3.copy()
+    pts_user_u3_r[:, 0] = 1.0 - pts_user_u3_r[:, 0]
+    p_uu3_r, c_uu3_r = classifier.classify(pts_user_u3_r, handedness="Right")
+    assert p_uu3_r == "U" and c_uu3_r >= 0.92, f"User U image 3 (Right hand) should classify as U, got {p_uu3_r} ({c_uu3_r})"
+    assert p_uu3_r != "K" and p_uu3_r != "H" and p_uu3_r != "N"
+
+    # H, U, N mutual exclusivity tests:
+    # 1. Base U (upright): NEVER H, NEVER N
+    p_u, _ = classifier.classify(base_u, handedness="Right")
+    assert p_u == "U"
+    assert p_u != "H" and p_u != "N"
+
+    # 2. Base H (horizontal): NEVER U, NEVER N
+    base_h = create_base_skeleton("H")
+    p_h, _ = classifier.classify(base_h, handedness="Right")
+    assert p_h == "H"
+    assert p_h != "U" and p_h != "N"
+
+    # 3. Base N (downward): NEVER U, NEVER H
+    base_n = create_base_skeleton("N")
+    p_n, _ = classifier.classify(base_n, handedness="Right")
+    assert p_n == "N"
+    assert p_n != "U" and p_n != "H"
+
 
 def test_strict_e_gesture():
     """Verifies that all 4 fingers curled down with thumb tucked underneath detects E with 100% left/right parity."""
@@ -1456,6 +1930,70 @@ def test_strict_e_gesture():
 
     # 3. Must NEVER confuse with S, T, A, or D
     assert pred_l not in {"S", "T", "A", "D"}, f"User E should not be confused with {pred_l}"
+
+
+def test_strict_x_gesture():
+    """Verifies that index hooked back gesture classifies as X with 100% left/right parity and zero false positives."""
+    from data.train_model import create_base_skeleton
+
+    classifier_h = GestureClassifier(mode="heuristic")
+    classifier_m = GestureClassifier(mode="hybrid")
+
+    # Real User X image landmarks from media_1795418505332_2f96935b.jpg (resolution: 395x640)
+    w, h = 395.0, 640.0
+    pts_user_x = np.zeros((21, 3), dtype=np.float32)
+    pts_user_x[0]  = [229.4 / w, 603.7 / h, 0.0]
+    pts_user_x[1]  = [121.5 / w, 487.3 / h, -0.02]
+    pts_user_x[2]  = [95.9 / w, 364.8 / h, -0.04]
+    pts_user_x[3]  = [103.4 / w, 280.9 / h, -0.05]
+    pts_user_x[4]  = [121.4 / w, 210.4 / h, -0.07]
+    pts_user_x[5]  = [247.1 / w, 257.6 / h, 0.0]
+    pts_user_x[6]  = [205.6 / w, 151.2 / h, -0.03]
+    pts_user_x[7]  = [144.2 / w, 96.1 / h, -0.04]
+    pts_user_x[8]  = [91.4 / w, 57.5 / h, -0.05]
+    pts_user_x[9]  = [296.7 / w, 271.2 / h, 0.0]
+    pts_user_x[10] = [136.5 / w, 199.5 / h, -0.03]
+    pts_user_x[11] = [84.0 / w, 287.3 / h, -0.04]
+    pts_user_x[12] = [111.7 / w, 335.9 / h, -0.05]
+    pts_user_x[13] = [309.2 / w, 304.0 / h, 0.0]
+    pts_user_x[14] = [141.0 / w, 237.8 / h, -0.03]
+    pts_user_x[15] = [108.2 / w, 323.7 / h, -0.04]
+    pts_user_x[16] = [148.2 / w, 365.0 / h, -0.05]
+    pts_user_x[17] = [294.0 / w, 348.0 / h, 0.0]
+    pts_user_x[18] = [162.1 / w, 284.8 / h, -0.03]
+    pts_user_x[19] = [134.8 / w, 335.9 / h, -0.04]
+    pts_user_x[20] = [168.8 / w, 365.0 / h, -0.05]
+
+    # 1. Left hand (user image)
+    pred_hl, conf_hl = classifier_h.classify(pts_user_x, handedness="Left")
+    assert pred_hl == "X", f"User X image (heuristic) should classify as X, got {pred_hl} ({conf_hl:.2f})"
+    assert conf_hl >= 0.95
+
+    pred_ml, conf_ml = classifier_m.classify(pts_user_x, handedness="Left")
+    assert pred_ml == "X", f"User X image (hybrid) should classify as X, got {pred_ml} ({conf_ml:.2f})"
+    assert conf_ml >= 0.95
+
+    # 2. Right hand parity (mirrored)
+    pts_user_x_r = pts_user_x.copy()
+    pts_user_x_r[:, 0] = 1.0 - pts_user_x_r[:, 0]
+
+    pred_hr, conf_hr = classifier_h.classify(pts_user_x_r, handedness="Right")
+    assert pred_hr == "X", f"User X image Right hand (heuristic) should classify as X, got {pred_hr} ({conf_hr:.2f})"
+    assert conf_hr >= 0.95
+
+    pred_mr, conf_mr = classifier_m.classify(pts_user_x_r, handedness="Right")
+    assert pred_mr == "X", f"User X image Right hand (hybrid) should classify as X, got {pred_mr} ({conf_mr:.2f})"
+    assert conf_mr >= 0.95
+
+    # 3. Base skeleton X
+    base_x = create_base_skeleton("X")
+    pred_bx, conf_bx = classifier_m.classify(base_x, handedness="Right")
+    assert pred_bx == "X", f"Base skeleton X should classify as X, got {pred_bx} ({conf_bx:.2f})"
+    assert conf_bx >= 0.95
+
+    # 4. Strict exclusion: must never classify as P, D, L, or fist letters
+    assert pred_hl not in {"P", "D", "L", "A", "S", "T", "E", "M", "N"}, f"Must not be confused with {pred_hl}"
+    assert pred_ml not in {"P", "D", "L", "A", "S", "T", "E", "M", "N"}, f"Must not be confused with {pred_ml}"
 
 
 def test_lstmr_dynamic_j_and_z_trajectories():
@@ -1715,6 +2253,8 @@ if __name__ == "__main__":
     print("[PASS] 3D Canonical Alignment test passed")
     test_debouncer_stabilization()
     print("[PASS] Debouncer test passed")
+    test_hand_motion_detector_and_steady_gate()
+    print("[PASS] Hand Motion Detector & Steady Gate test passed")
     test_visualizer_rendering()
     print("[PASS] Visualizer test passed")
     test_tracker_initialization()
@@ -1761,14 +2301,20 @@ if __name__ == "__main__":
     print("[PASS] Strict P gesture test passed")
     test_strict_q_gesture()
     print("[PASS] Strict Q gesture test passed")
+    test_strict_r_gesture()
+    print("[PASS] Strict R gesture test passed")
     test_strict_g_gesture()
     print("[PASS] Strict G gesture test passed")
     test_strict_i_vs_j_distinction()
     print("[PASS] Strict I vs J distinction test passed")
     test_strict_s_vs_t_gesture()
     print("[PASS] Strict S vs T gesture test passed")
+    test_strict_u_vs_v_gesture()
+    print("[PASS] Strict U vs V gesture test passed")
     test_strict_e_gesture()
     print("[PASS] Strict E gesture test passed")
+    test_strict_x_gesture()
+    print("[PASS] Strict X gesture test passed")
     test_lstmr_dynamic_j_and_z_trajectories()
     print("[PASS] LSTMR Dynamic J and Z trajectories test passed")
     test_full_alphabet_classification_report()

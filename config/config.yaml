@@ -26,8 +26,14 @@ filter:
   enable_trajectory: true  # Dynamic stroke tracking for J and Z signs
 
 debouncer:
-  consecutive_frames: 3    # Fast 3-frame lock-on (~100ms at 30fps)
+  consecutive_frames: 4    # Robust lock-on (~130ms at 30fps), rejects transient flickers
   history_length: 8        # Efficient history window
+
+motion_detector:
+  enable_steady_gate: true # Suppress letters while hand is moving; only show once held steady
+  motion_threshold: 0.040  # Tightened threshold detecting both hand translation and finger morphing
+  min_steady_frames: 6     # Consecutive steady frames before unlocking letter output (~0.20s)
+  window_size: 7           # Velocity smoothing window
 
 visualizer:
   mirror: true
@@ -49,10 +55,10 @@ speller:
   enable_autocomplete: true # Word suggestion HUD & [TAB] completion
 
 word_builder:
-  hold_frames: 10          # Frames (~0.33s at 30 FPS) gesture must be held to append letter
-  confirm_hold_frames: 8   # Frames thumbs-up must be held to confirm & pronounce word
-  cooldown_frames: 6       # Cooldown frames after committing an event
-  neutral_frames: 3        # Frames of neutral pose required between repeated letters (e.g. HELLO)
+  hold_frames: 18          # Frames (~0.60s at 30 FPS) gesture must be steadily held to commit letter
+  confirm_hold_frames: 14  # Frames thumbs-up must be held to confirm & pronounce word (~0.47s)
+  cooldown_frames: 12      # Cooldown frames after committing an event (~0.40s)
+  neutral_frames: 8        # Frames of neutral pose required between repeated letters (e.g. HELLO)
   min_confidence: 0.92     # Confidence threshold to accept gestures
   enable_tts: true         # Non-blocking Text-To-Speech pronunciation of confirmed words
   voice_rate: 150          # Natural speech rate (words per minute)

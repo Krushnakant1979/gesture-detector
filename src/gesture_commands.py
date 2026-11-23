@@ -96,20 +96,25 @@ class ControlGestureRecognizer:
             return False, 0.0
 
         # Thumb vertical direction check
-        is_pointing_up = m.get("is_thumb_pointing_up", False)
-        is_horiz = m.get("is_thumb_horizontal", False)
-        is_down = m.get("is_thumb_pointing_down", False)
-
-        if not is_pointing_up or is_horiz or is_down:
-            return False, 0.0
-
-        # Vertical anatomical ordering: Tip (4) higher than IP (3) higher than MCP (2)
-        # In normalized screen coordinates, smaller y means higher in physical space
         tip_y = lm[4][1]
         ip_y = lm[3][1]
         mcp_y = lm[2][1]
 
-        if not (tip_y < ip_y and ip_y < mcp_y + 0.02 * ref_scale):
+        dx_thumb = abs(lm[4][0] - lm[2][0])
+        dy_thumb = lm[2][1] - lm[4][1]  # positive when tip is higher in space than MCP
+
+        is_down = m.get("is_thumb_pointing_down", False)
+
+        # Must be pointing upward (tip higher than MCP and IP, not pointing down, positive upward dy)
+        if is_down or dy_thumb <= 0:
+            return False, 0.0
+
+        if not (tip_y < ip_y and ip_y < mcp_y + 0.04 * ref_scale):
+            return False, 0.0
+
+        # Thumb upward slant: dy_thumb >= 0.45 * dx_thumb (angle > ~24 degrees above horizontal)
+        # Supports authentic human thumbs-up poses tilted comfortably toward camera
+        if dy_thumb < 0.45 * dx_thumb:
             return False, 0.0
 
         # Knuckle orientation (MCP 5 to MCP 17)
@@ -117,41 +122,35 @@ class ControlGestureRecognizer:
         dy_knuckles = abs(lm[17][1] - lm[5][1])
 
         # Strict Distinction from ASL 'A' and closed fists (A, E, S, T, M, N):
-        # In ASL fists (like 'A'), the fist faces the camera: knuckles (MCP 5 to 17) run horizontally (dx > 1.15 * dy).
-        # In THUMBS_UP, the hand is held sideways: knuckles run vertically or tilted down (dy >= 0.65 * dx).
-        if dx_knuckles > 1.15 * dy_knuckles:
+        # In ASL fists (like 'A'), the fist faces the camera: knuckles (MCP 5 to 17) run horizontally (dx > 1.45 * dy).
+        # In THUMBS_UP, the hand is held sideways: knuckles run vertically or tilted down.
+        if dx_knuckles > 1.45 * dy_knuckles:
             return False, 0.0
 
         # Knuckle heights (MCP 5, 9, 13, 17)
         knuckle_min_y = min(lm[5][1], lm[9][1], lm[13][1], lm[17][1])
         elevation_above_knuckles = (knuckle_min_y - tip_y) / ref_scale
 
-        # Must tower high above all knuckles (at least 0.35 normalized ref_scale above)
-        if elevation_above_knuckles < 0.35:
+        # Must tower high above all knuckles (at least 0.20 normalized ref_scale above)
+        if elevation_above_knuckles < 0.20:
             return False, 0.0
 
         h_thumb = float(m.get("h_thumb", 0.0))
-        # Clear distinction from ASL 'A': ASL 'A' has h_thumb near 0.0 (max ~0.20)
-        if h_thumb < 0.25:
-            return False, 0.0
-
-        # Thumb must be pointing predominantly vertical (dy > 1.3 * dx)
-        dx_thumb = abs(lm[4][0] - lm[2][0])
-        dy_thumb = lm[2][1] - lm[4][1]  # positive when pointing up
-        if dy_thumb < 1.30 * dx_thumb:
+        # Clear distinction from ASL 'A': ASL 'A' has h_thumb near 0.0 (max ~0.15)
+        if h_thumb < 0.18:
             return False, 0.0
 
         # Fingertips (8, 12, 16, 20) must be lower than thumb tip
         for tip_idx in (8, 12, 16, 20):
-            if lm[tip_idx][1] < tip_y + 0.10 * ref_scale:
+            if lm[tip_idx][1] < tip_y + 0.06 * ref_scale:
                 return False, 0.0
 
         # Compute confidence score
-        score = 0.93
-        if elevation_above_knuckles >= 0.45:
+        score = 0.94
+        if elevation_above_knuckles >= 0.35:
             score += 0.03
-        if dy_thumb >= 1.6 * dx_thumb:
-            score += 0.03
+        if dy_thumb >= 1.0 * dx_thumb:
+            score += 0.02
         confidence = float(np.clip(score, 0.92, 0.99))
 
         return True, confidence

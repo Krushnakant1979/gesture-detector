@@ -95,7 +95,8 @@ class GestureClassifier:
 
         # Dynamic gesture priority (e.g. traced 'Z' or 'J' strokes)
         if dynamic_gesture == "Z":
-            return "Z", 0.98
+            if self.validate_sign_anatomy("Z", m, lm=landmarks_3d, handedness=handedness):
+                return "Z", 0.98
         elif dynamic_gesture == "J":
             # Guard: J strictly requires pinky movement (never G shape or extended index)
             if not (m.get("is_G_shape") or m.get("ext_index") or m.get("horiz_index")):
@@ -209,12 +210,14 @@ class GestureClassifier:
         """
         # ASL I requires an upright hand in camera/physical space; never accept a tilted/horizontal/J hand
         if best_class == "I":
-            if m.get("is_J_shape") or m.get("horiz_pinky") or m.get("is_hand_horizontal") or m.get("dx_pnk", 0.0) > 0.65 * m.get("dy_pnk", 1.0):
+            if m.get("is_J_shape") or m.get("horiz_pinky") or m.get("is_hand_horizontal") or m.get("dx_pnk", 0.0) > 0.70 * m.get("dy_pnk", 1.0):
                 return False
             return self._check_anatomy("I", m)
 
         # ASL J requires pinky pointing sideways/horizontal or tilted in physical space; never canonical upright
         if best_class == "J":
+            if m.get("is_I_shape") or (m.get("up_pinky") and m.get("dy_pnk", 1.0) > 1.20 * m.get("dx_pnk", 0.0) and not m.get("horiz_pinky") and not m.get("is_hand_horizontal")):
+                return False
             return self._check_anatomy("J", m)
 
         # ASL S and T require strict thumb placement in physical space
@@ -322,7 +325,7 @@ class GestureClassifier:
                     return False
                 return True
             elif best_class == "M":
-                if m.get("is_S_shape") or m.get("is_T_shape"):
+                if m.get("is_S_shape") or m.get("is_T_shape") or m.get("is_Q_shape") or m.get("is_P_shape"):
                     return False
                 if m.get("is_M_shape"):
                     return True
@@ -337,6 +340,10 @@ class GestureClassifier:
                 return False
             elif best_class == "N":
                 if m.get("is_S_shape") or m.get("is_T_shape") or m.get("is_P_shape"):
+                    return False
+                if idx_up or mid_up:
+                    return False
+                if m.get("is_hand_horizontal") or (idx_horiz and mid_horiz):
                     return False
                 if m.get("is_N_shape"):
                     return True
@@ -424,12 +431,14 @@ class GestureClassifier:
             return True
 
         if best_class == "I":
-            if not (pnk_up and pnk_ext):
+            if not pnk_ext:
                 return False
             # ASL I requires straight upright pinky on an upright hand (never horizontal, G gesture, or J)
-            if m.get("straight_pnk", 0.5) < 0.82 or m.get("is_hand_horizontal") or m.get("is_G_shape") or m.get("is_J_shape") or m.get("horiz_pinky"):
+            if m.get("straight_pnk", 0.5) < 0.80 or m.get("is_hand_horizontal") or m.get("is_G_shape") or m.get("is_J_shape") or m.get("horiz_pinky"):
                 return False
-            if idx_ext or mid_ext or rng_ext or idx_horiz:
+            if (idx_ext and m.get("straight_idx", 0.0) >= 0.80) or (mid_ext and m.get("straight_mid", 0.0) >= 0.80) or (rng_ext and m.get("straight_rng", 0.0) >= 0.80):
+                return False
+            if idx_up or mid_up or rng_up or idx_horiz:
                 return False
             if thumb_out:
                 return False
@@ -444,7 +453,9 @@ class GestureClassifier:
                 return False
             if m.get("straight_pnk", 0.5) < 0.80:
                 return False
-            if idx_ext or mid_ext or rng_ext or idx_up or mid_up or rng_up or m.get("is_G_shape"):
+            if (idx_ext and m.get("straight_idx", 0.0) >= 0.80) or (mid_ext and m.get("straight_mid", 0.0) >= 0.80) or (rng_ext and m.get("straight_rng", 0.0) >= 0.80):
+                return False
+            if idx_up or mid_up or rng_up or m.get("is_G_shape") or m.get("is_I_shape"):
                 return False
             if thumb_out:
                 return False
@@ -454,7 +465,6 @@ class GestureClassifier:
             is_sideways = bool(
                 m.get("horiz_pinky")
                 or m.get("is_hand_horizontal")
-                or m.get("is_hand_tilted")
                 or m.get("is_pinky_tilted")
                 or (dx_pnk > 0.65 * dy_pnk)
             )
@@ -477,8 +487,13 @@ class GestureClassifier:
 
         if best_class == "X":
             if mid_ext or rng_ext or pnk_ext:
-                return False
-            return True
+                if m.get("up_middle") or m.get("up_ring") or m.get("up_pinky"):
+                    return False
+                if m.get("straight_mid", 0.0) >= 0.80 or m.get("straight_rng", 0.0) >= 0.80:
+                    return False
+            if m.get("is_X_shape") or m.get("index_hooked"):
+                return True
+            return bool(not (mid_up or rng_up or pnk_up))
 
         # 5. Letter P: Downward K-shape
         if best_class == "P":
@@ -486,7 +501,7 @@ class GestureClassifier:
                 m.get("is_P_shape")
                 or (
                     idx_ext
-                    and (mid_down or m.get("downward_mid_slope", 0.0) >= 0.35)
+                    and m.get("downward_mid_slope", 0.0) >= 0.35
                     and not (rng_up or pnk_up)
                     and m.get("p_spread_ratio", 0.0) >= 1.80
                     and d_im >= 0.40
@@ -496,28 +511,60 @@ class GestureClassifier:
         # 6. Two-finger signs (H, K, R, U, V)
         if best_class in {"H", "K", "R", "U", "V"}:
             if not (idx_ext and mid_ext):
-                return False
+                if not (idx_up and mid_up):
+                    return False
             if rng_up or pnk_up:
                 return False
             if best_class == "H":
                 if idx_up and mid_up and not m.get("is_hand_horizontal"):
                     return False
-            elif best_class == "K":
-                if not m.get("is_thumb_between_index_middle"):
+                if m.get("is_hand_pointing_down") or (idx_down and mid_down):
                     return False
+                if not ((idx_horiz and mid_horiz) or m.get("is_hand_horizontal")):
+                    return False
+                return True
             elif best_class == "R":
                 if not (idx_up and mid_up):
                     return False
+                if rng_up or pnk_up:
+                    return False
+                if not (m.get("are_index_middle_crossed") or m.get("is_R_shape")):
+                    return False
+                return True
+            elif best_class == "K":
+                if m.get("are_index_middle_crossed") or m.get("is_R_shape"):
+                    return False
+                if not m.get("is_thumb_between_index_middle"):
+                    return False
+                if d_im < 0.22 or m.get("u_v_spread_ratio", 1.0) < 1.15 or m.get("is_U_shape"):
+                    return False
+                return True
             elif best_class == "U":
+                if m.get("are_index_middle_crossed") or m.get("is_R_shape"):
+                    return False
                 if not (idx_up and mid_up):
                     return False
-                if d_im >= 0.42:
+                if m.get("is_hand_horizontal") or (idx_horiz and mid_horiz):
                     return False
+                if m.get("is_hand_pointing_down") or (idx_down and mid_down):
+                    return False
+                if m.get("is_U_shape"):
+                    return True
+                if d_im >= 0.40 or m.get("u_v_spread_ratio", 1.0) >= 1.25:
+                    return False
+                if m.get("is_thumb_between_index_middle") and d_im >= 0.25 and m.get("u_v_spread_ratio", 1.0) >= 1.20:
+                    return False
+                return True
             elif best_class == "V":
+                if m.get("are_index_middle_crossed") or m.get("is_R_shape"):
+                    return False
                 if not (idx_up and mid_up):
                     return False
-                if d_im < 0.28:
+                if d_im < 0.25 and m.get("u_v_spread_ratio", 1.0) < 1.20:
                     return False
+                if m.get("is_thumb_between_index_middle"):
+                    return False
+                return True
             return True
 
         # 6. Three-finger signs (W, F)
@@ -552,6 +599,25 @@ class GestureClassifier:
         # 9. Q sign: Downward G-shape (Index + Thumb pincher pointing downward)
         if best_class == "Q":
             return bool(m.get("is_Q_shape") or ((m.get("downward_idx_slope", 0.0) >= 0.35 or (idx_down and not m.get("horiz_index"))) and d_ti <= 0.70 and not (mid_up or rng_up or pnk_up)))
+
+        # 10. Dynamic / Static Z stroke handshape validation:
+        # Strictly requires index pointing straight UP, other fingers curled into fist,
+        # thumb folded over fingers (never fist S/T/A/E/M/N, hooked X, L, or open palm).
+        if best_class == "Z":
+            return bool(
+                (idx_ext or idx_up)
+                and m.get("straight_idx", 0.0) >= 0.80
+                and not (mid_up or rng_up or pnk_up)
+                and not m.get("is_X_shape")
+                and not m.get("index_hooked")
+                and not m.get("is_L_shape")
+                and not m.get("thumb_extended_out")
+                and not m.get("is_flat_open_hand")
+                and not (m.get("is_S_shape") or m.get("is_T_shape") or m.get("is_A_shape") or m.get("is_E_shape") or m.get("is_M_shape") or m.get("is_N_shape"))
+                and (not mid_ext or m.get("straight_mid", 0.0) < 0.78)
+                and (not rng_ext or m.get("straight_rng", 0.0) < 0.78)
+                and (not pnk_ext or m.get("straight_pnk", 0.0) < 0.78)
+            )
 
         return True
 
@@ -619,32 +685,34 @@ class GestureClassifier:
         # ==============================================================
         # PRIORITY 2 — Letter X
         # ==============================================================
-        if m["index_hooked"]:
-            return "X", 0.95
+        if (m.get("is_X_shape") or m.get("index_hooked")) and not (
+            m.get("is_T_shape") or m.get("is_S_shape") or m.get("is_M_shape") or m.get("is_N_shape") or m.get("is_E_shape")
+        ):
+            return "X", 0.96
 
         # ==============================================================
-        # PRIORITY 3a — Letter M (3-finger forward drape)
-        # ==============================================================
-        if m.get("is_M_shape"):
-            return "M", 0.96
-
-        # ==============================================================
-        # PRIORITY 3b — Letter N (2-finger forward drape)
-        # ==============================================================
-        if m.get("is_N_shape"):
-            return "N", 0.96
-
-        # ==============================================================
-        # PRIORITY 4 — Letter Q (Downward G-shape)
+        # PRIORITY 3 — Letter Q (Downward G-shape)
         # ==============================================================
         if m.get("is_Q_shape"):
             return "Q", 0.96
 
         # ==============================================================
-        # PRIORITY 5 — Letter P (Downward K-shape)
+        # PRIORITY 4 — Letter P (Downward K-shape)
         # ==============================================================
         if m.get("is_P_shape"):
             return "P", 0.96
+
+        # ==============================================================
+        # PRIORITY 5a — Letter M (3-finger forward drape)
+        # ==============================================================
+        if m.get("is_M_shape"):
+            return "M", 0.96
+
+        # ==============================================================
+        # PRIORITY 5b — Letter N (2-finger forward drape)
+        # ==============================================================
+        if m.get("is_N_shape"):
+            return "N", 0.96
 
         # ==============================================================
         # PRIORITY 6 — Letter C (Arched C-cup formation)
@@ -658,6 +726,24 @@ class GestureClassifier:
         # ==============================================================
         if m.get("is_G_shape"):
             return "G", 0.96
+
+        # ==============================================================
+        # PRIORITY 8 — Letter R (Index and Middle crossed)
+        # ==============================================================
+        if m.get("are_index_middle_crossed") or m.get("is_R_shape"):
+            return "R", 0.96
+
+        # ==============================================================
+        # PRIORITY 9 — Letter U (Index and Middle straight UP together)
+        # ==============================================================
+        if m.get("is_U_shape"):
+            return "U", 0.96
+
+        # ==============================================================
+        # PRIORITY 10 — Letter V (Index and Middle straight UP spread apart in V)
+        # ==============================================================
+        if m.get("is_V_shape"):
+            return "V", 0.96
 
         # ==============================================================
         # GROUP A — Four extended fingers (B, C)
@@ -708,7 +794,11 @@ class GestureClassifier:
         # ==============================================================
         # GROUP C — Two extended fingers (P, H, K, R, V, U)
         # ==============================================================
-        if num_ext == 2 and idx_ext and mid_ext and not rng_ext and not pnk_ext:
+        is_two_fingers = bool(
+            (num_ext == 2 and idx_ext and mid_ext and not rng_ext and not pnk_ext)
+            or (idx_up and mid_up and not rng_up and not pnk_up and not thumb_out)
+        )
+        if is_two_fingers:
             # P vs N (fingers pointing downward):
             # N: Index + Middle parallel and together (2-finger forward drape)
             # P: Index + Middle spread apart like downward K (spread_ratio >= 1.20)
@@ -730,13 +820,13 @@ class GestureClassifier:
             if (idx_horiz and mid_horiz) or m["is_hand_horizontal"]:
                 return "H", 0.95
 
-            # K: Index+Middle UP, thumb points UP BETWEEN them
-            if m["is_thumb_between_index_middle"] or (m.get("is_thumb_elevated") and m.get("is_thumb_in_finger_corridor")):
-                return "K", 0.95
-
             # R: Index+Middle both UP and CROSSED
-            if m["are_index_middle_crossed"]:
-                return "R", 0.95
+            if m["are_index_middle_crossed"] or m.get("is_R_shape"):
+                return "R", 0.96
+
+            # K: Index+Middle UP, thumb points UP BETWEEN them (requires fingers spread apart)
+            if (m["is_thumb_between_index_middle"] or (m.get("is_thumb_elevated") and m.get("is_thumb_in_finger_corridor") and m.get("d_thumb_middle_pip", 1.0) < 0.38)) and d_im >= 0.22 and not m.get("is_U_shape"):
+                return "K", 0.95
 
             # V vs U: Both fingers UP
             if idx_up and mid_up:
@@ -744,9 +834,9 @@ class GestureClassifier:
                 spread_ratio = (d_im * ref) / (d_mcp_im + 1e-5)
                 spread_thresh = float(self.heuristics.get("u_v_spread_ratio", 1.25))
                 if spread_ratio >= spread_thresh and d_im >= 0.25:
-                    return "V", 0.95
+                    return "V", 0.96
                 else:
-                    return "U", 0.94
+                    return "U", 0.96
 
         # ==============================================================
         # GROUP D1 — Single index extended (G, L, D, Q)
@@ -775,13 +865,23 @@ class GestureClassifier:
         # ==============================================================
         # GROUP D2 — Single pinky extended (Y, J, I)
         # ==============================================================
-        if pnk_ext and not idx_ext and not mid_ext and not rng_ext:
+        fingers_123_not_ext = bool(
+            (not idx_ext or m.get("straight_idx", 0.0) < 0.80)
+            and (not mid_ext or m.get("straight_mid", 0.0) < 0.80)
+            and (not rng_ext or m.get("straight_rng", 0.0) < 0.80)
+            and not (idx_up or mid_up or rng_up)
+        )
+        if pnk_ext and fingers_123_not_ext:
             if thumb_out:
                 return "Y", 0.96
 
             # J handshape: Pinky extended sideways/horizontally or tilted in J pose
             if m.get("is_J_shape"):
                 return "J", 0.96
+
+            # I handshape: Pinky extended vertically straight UP
+            if m.get("is_I_shape"):
+                return "I", 0.96
 
             # ASL I requires an upright hand with pinky pointing straight UP (never horizontal or J gesture)
             dx_pnk = abs(lm[20][0] - lm[17][0])
@@ -806,7 +906,7 @@ class GestureClassifier:
 
             # T: Thumb poked up between index and middle
             if m.get("is_T_shape") or (0.10 <= t_thumb < fist_n and m.get("is_thumb_distal_pointing_up", False) and not m.get("is_thumb_distal_horizontal", False)):
-                return "T", 0.94
+                return "T", 0.96
 
             # M: 3 draped fingers or explicit M shape
             if m.get("is_M_shape") or (

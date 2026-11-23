@@ -21,9 +21,9 @@ from src.classifier import GestureClassifier
 from src.filters import (
     ExponentialMovingAverage,
     GestureDebouncer,
+    HandMotionDetector,
     OneEuroFilter,
     StrokeTrajectoryTracker,
-    TextToSpeech,
     WordPredictor,
 )
 from src.gesture_commands import ControlGestureRecognizer, ControlGestureType
@@ -81,10 +81,10 @@ def load_config(config_path: str = "config/config.yaml") -> Dict[str, Any]:
             "enable_autocomplete": True,
         },
         "word_builder": {
-            "hold_frames": 10,
-            "confirm_hold_frames": 8,
-            "cooldown_frames": 6,
-            "neutral_frames": 3,
+            "hold_frames": 18,
+            "confirm_hold_frames": 14,
+            "cooldown_frames": 12,
+            "neutral_frames": 8,
             "min_confidence": 0.92,
             "enable_tts": True,
             "voice_rate": 150,
@@ -162,12 +162,21 @@ def main() -> None:
     )
     normalizer = LandmarkNormalizer(heuristics=heuristics_cfg)
 
-    # 5. Debouncer & Visualizer
+    # 5. Debouncer, Motion Detector & Visualizer
     deb_cfg = config.get("debouncer", {})
     debouncer = GestureDebouncer(
         consecutive_frames=deb_cfg.get("consecutive_frames", 3),
         history_length=deb_cfg.get("history_length", 8),
     )
+
+    motion_cfg = config.get("motion_detector", {})
+    motion_detector = None
+    if motion_cfg.get("enable_steady_gate", True):
+        motion_detector = HandMotionDetector(
+            motion_threshold=motion_cfg.get("motion_threshold", 0.07),
+            min_steady_frames=motion_cfg.get("min_steady_frames", 3),
+            window_size=motion_cfg.get("window_size", 5),
+        )
 
     vis_cfg = config.get("visualizer", {})
     visualizer = ModernVisualizer(
@@ -257,6 +266,10 @@ def main() -> None:
             confidence = 0.0
             debug_info = None
             effective_handedness = "Right"
+            dynamic_stroke = None
+
+            is_steady = True
+            motion_score = 0.0
 
             if hands:
                 primary_hand = hands[0]
@@ -277,6 +290,13 @@ def main() -> None:
                     handedness=effective_handedness,
                 )
 
+                # Track hand motion & steadiness
+                if motion_detector:
+                    is_steady, motion_score = motion_detector.update(
+                        primary_hand.landmarks_normalized,
+                        ref_scale=debug_info.get("ref_scale") if debug_info else None,
+                    )
+
                 # Update trajectory tracker for dynamic signs ('J' and 'Z')
                 dynamic_stroke = None
                 if stroke_tracker:
@@ -295,9 +315,19 @@ def main() -> None:
                 landmark_smoother.reset()
                 if stroke_tracker:
                     stroke_tracker.reset()
+                if motion_detector:
+                    motion_detector.reset()
+                is_steady = False
 
-            # Debounce prediction to stabilize letter display
-            active_letter, active_conf = debouncer.update(raw_letter, confidence)
+            # When the hand is moving (transitioning between gestures or shaking),
+            # suppress letter output so the model does not show transient random letters.
+            # Once the hand gesture is held steady (or completing a dynamic stroke like J/Z),
+            # debounce and display the correct alphabet sign.
+            if motion_detector and not is_steady and dynamic_stroke is None:
+                active_letter, active_conf = debouncer.update("None", 0.0)
+            else:
+                # Debounce prediction to stabilize letter display
+                active_letter, active_conf = debouncer.update(raw_letter, confidence)
 
             # Process frame through Gesture Event Manager
             hand_lm = hands[0].landmarks_normalized if hands else None
@@ -308,6 +338,7 @@ def main() -> None:
                 debug_info=debug_info,
                 handedness=effective_handedness,
                 is_tts_speaking=speech_manager.is_speaking,
+                is_steady=(is_steady or dynamic_stroke is not None),
             )
 
             # Handle discrete gesture events
@@ -349,6 +380,7 @@ def main() -> None:
                 last_spoken_word=speech_manager.last_spoken_word,
                 tts_status=speech_manager.status_text,
                 active_control="THUMBS_UP" if gesture_event.state == SystemState.CONFIRMING else "NONE",
+                is_steady=is_steady,
             )
 
             cv2.imshow(window_name, rendered)
