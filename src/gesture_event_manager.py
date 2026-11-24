@@ -155,10 +155,12 @@ class GestureEventManager:
 
                 # Guard against repeated continuous confirmations
                 if self.has_confirmed_current_word:
-                    self.current_state = SystemState.WAITING
+                    self.current_state = SystemState.CONFIRMING
                     return GestureEvent(
                         EventType.NONE,
-                        state=SystemState.WAITING,
+                        value="THUMBS_UP",
+                        confidence=ctrl_conf,
+                        state=SystemState.CONFIRMING,
                         progress=1.0,
                     )
 
@@ -225,6 +227,7 @@ class GestureEventManager:
         # Reset control hold if hand is not in control gesture
         self.control_candidate = ControlGestureType.NONE
         self.control_hold_count = 0
+        self.has_confirmed_current_word = False
 
         # 2. Detect Neutral Hand Pose or No Hand (for Alphabet signs)
         # Neutral occurs when: no hand in frame, confidence < 0.92, or flat open palm
@@ -259,6 +262,7 @@ class GestureEventManager:
         # 3. Process ASL Alphabet Sign (A-Z)
         if len(raw_letter) == 1 and raw_letter.isalpha() and confidence >= self.min_confidence:
             letter = raw_letter.upper()
+            self.has_confirmed_current_word = False
 
             # Guard against continuous duplicate committing:
             # If the user is still holding the same letter they just committed,

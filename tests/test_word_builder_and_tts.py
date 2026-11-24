@@ -467,6 +467,51 @@ def test_user_uploaded_a_vs_thumbs_up():
             confirmed2 = wb_test2.confirm()
     assert confirmed2 == "USER", f"Expected confirmed word USER, got {confirmed2}"
 
+    # Image 5 (User's confirm thumb gesture, media_1795498504175_7369d38d.jpg)
+    w5, h5 = 1024.0, 576.0
+    lm5 = np.zeros((21, 3), dtype=np.float32)
+    lm5[0] = [708 / w5, 363 / h5, 0]
+    lm5[1] = [669 / w5, 278 / h5, 0]
+    lm5[2] = [629 / w5, 230 / h5, 0]
+    lm5[3] = [601 / w5, 189 / h5, 0]
+    lm5[4] = [596 / w5, 152 / h5, 0]
+    lm5[5] = [576 / w5, 248 / h5, 0]
+    lm5[6] = [528 / w5, 271 / h5, 0]
+    lm5[7] = [549 / w5, 277 / h5, 0]
+    lm5[8] = [570 / w5, 272 / h5, 0]
+    lm5[9] = [571 / w5, 284 / h5, 0]
+    lm5[10] = [528 / w5, 297 / h5, 0]
+    lm5[11] = [549 / w5, 301 / h5, 0]
+    lm5[12] = [571 / w5, 298 / h5, 0]
+    lm5[13] = [572 / w5, 320 / h5, 0]
+    lm5[14] = [537 / w5, 324 / h5, 0]
+    lm5[15] = [556 / w5, 328 / h5, 0]
+    lm5[16] = [577 / w5, 327 / h5, 0]
+    lm5[17] = [565 / w5, 352 / h5, 0]
+    lm5[18] = [516 / w5, 364 / h5, 0]
+    lm5[19] = [546 / w5, 349 / h5, 0]
+    lm5[20] = [584 / w5, 353 / h5, 0]
+
+    for hand in ("Left", "Right"):
+        m5 = norm.analyze_hand(lm5, hand)
+        tu5, conf5 = cgr.is_thumbs_up(lm5, m5, hand)
+        letter5, _ = clf.classify(lm5, handedness=hand, precomputed_m=m5)
+        assert tu5 and conf5 >= 0.95, f"User's confirm thumb gesture ({hand}) should trigger is_thumbs_up, got {tu5} ({conf5:.2f})"
+        assert letter5 is None or letter5 == "None", f"User's confirm thumb gesture ({hand}) must not be classified as alphabet letter"
+
+    # End-to-end confirmation with word HARASHAL
+    wb_test3 = WordBuilder()
+    for ch in "HARASHAL":
+        wb_test3.add_letter(ch)
+    gem_test3 = GestureEventManager(confirm_hold_frames=3)
+    m5_r = norm.analyze_hand(lm5, "Right")
+    confirmed3 = None
+    for _ in range(5):
+        ev = gem_test3.process_frame("None", 0.0, lm5, m5_r, handedness="Right")
+        if ev.event_type == EventType.CONFIRM:
+            confirmed3 = wb_test3.confirm()
+    assert confirmed3 == "HARASHAL", f"Expected confirmed word HARASHAL, got {confirmed3}"
+
 
 if __name__ == "__main__":
     print("Running Word Builder, Event Manager & TTS Test Suite...")

@@ -420,7 +420,7 @@ def main() -> None:
                 hold_progress=gesture_event.progress,
                 last_spoken_word=speech_manager.last_spoken_word,
                 tts_status=speech_manager.status_text,
-                active_control="THUMBS_UP" if gesture_event.state == SystemState.CONFIRMING else "NONE",
+                active_control="THUMBS_UP" if gesture_event.state == SystemState.CONFIRMING or gesture_event.value == "THUMBS_UP" else "NONE",
                 is_steady=is_steady,
             )
 
